@@ -5,7 +5,7 @@
 
 SDL_Renderer *R;
 const SDL_Color C_BG = { 0xe6, 0xec, 0xe2, 255 }, C_INK = { 0x1d, 0x20, 0x1d, 255 },
-                C_MUTE = { 0x7d, 0x85, 0x7c, 255 }, C_RULE = { 0xb9, 0xc1, 0xb7, 255 };
+                C_MUTE = { 0x58, 0x60, 0x57, 255 }, C_RULE = { 0xa9, 0xb2, 0xa7, 255 };
 
 static char font_path[3][700];
 #define NSIZES 8
@@ -22,7 +22,7 @@ static TTF_Font *font(int size, int weight) {
 int gfx_init(SDL_Renderer *ren, const char *pak_dir) {
   R = ren;
   if (TTF_Init() != 0) return -1;
-  static const char *names[3] = { "DMMono-Light.ttf", "DMMono-Regular.ttf", "DMMono-Medium.ttf" };
+  static const char *names[3] = { "GeistMono-Regular.ttf", "GeistMono-Medium.ttf", "GeistMono-Bold.ttf" };
   for (int w = 0; w < 3; w++) snprintf(font_path[w], sizeof font_path[w], "%s/%s", pak_dir, names[w]);
   if (!font(24, W_REG)) { fprintf(stderr, "font %s: %s\n", font_path[W_REG], TTF_GetError()); return -1; }
   return 0;

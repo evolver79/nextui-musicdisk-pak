@@ -32,4 +32,4 @@ Unzip `Tracker.pak.zip` into a new folder on the SD card, `Tools/tg5040/Tracker.
 `./package.sh` builds `dist/Tracker.pak.zip` in an ARM64 Debian bullseye container (Docker). `build/build.sh --shots
 <module>` also draws every screen to `build/out/shots/`. `./deploy.sh [ip]` copies a build to a Brick with SSH on.
 
-Fonts: DM Mono (SIL OFL). libxmp: MIT.
+Font: Geist Mono (SIL OFL). libxmp: MIT.

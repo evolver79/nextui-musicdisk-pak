@@ -14,6 +14,6 @@ build/build.sh
 cp build/out/tracker Tracker.pak/tracker
 ssh $OPTS root@$IP "mkdir -p '$DIR' /mnt/SDCARD/Music; rm -f '$DIR/tracker'"
 # the Brick has no scp: the files go over as a tar stream
-COPYFILE_DISABLE=1 tar -C Tracker.pak -cf - tracker launch.sh DMMono-Light.ttf DMMono-Regular.ttf DMMono-Medium.ttf | ssh $OPTS root@$IP "tar -xf - -C '$DIR'"
+COPYFILE_DISABLE=1 tar -C Tracker.pak -cf - tracker launch.sh GeistMono-Regular.ttf GeistMono-Medium.ttf GeistMono-Bold.ttf | ssh $OPTS root@$IP "tar -xf - -C '$DIR'"
 ssh $OPTS root@$IP "chmod +x '$DIR/tracker' '$DIR/launch.sh'; ls -la '$DIR'"
 echo "Done. Open Tools > Tracker on the Brick."

@@ -38,6 +38,7 @@ typedef struct { char path[1024]; Listing list; int cursor, top; } Level;
 typedef struct { const char *name; char root[700]; int remote; Level lv[24]; int depth, loading, failed; } Source;
 static Source src[3];
 static int cur_src;
+static int probing;   // the first scene.org listing at start: when it fails, we fall back to the SD card
 #define NSRC 3
 
 // --- playlist: the playable files of the folder a song was started from --------------------------------------------
@@ -160,7 +161,9 @@ static void job_poll(void) {
     s->loading = 0;
     if (job.depth == s->depth) { listing_free(&s->lv[s->depth].list); s->lv[s->depth].list = job.list; s->failed = !job.ok; }
     else listing_free(&job.list);
-    if (!job.ok) toast("Couldn't reach scene.org");
+    if (!job.ok && probing && job.src == 1 && job.depth == 0) { cur_src = 0; toast("No internet: showing the SD card"); }
+    else if (!job.ok) toast("Couldn't reach scene.org");
+    probing = 0;
   } else if (k == JOB_GET) {
     if (job.ok) { pl_i = job.play_index; start_playing(job.path); }
     else toast("Download failed");
@@ -510,8 +513,9 @@ int main(int argc, char **argv) {
 
   if (shots_dir) { shots(shots_dir, argc > 5 ? argv[5] : ""); SDL_Quit(); return 0; }
 
+  // Start on scene.org; the SD card is read too, and shown instead when there's no connection.
   open_level(&src[0]);
-  if (!src[0].lv[0].list.n) { cur_src = 1; open_level(&src[1]); }   // nothing on the card yet: start on scene.org
+  cur_src = 1; probing = 1; open_level(&src[1]);
 
   int held = -1; Uint32 repeat_at = 0;
   while (running) {

@@ -7,5 +7,5 @@ build/build.sh
 cp build/out/tracker Tracker.pak/tracker
 mkdir -p dist
 rm -f dist/Tracker.pak.zip
-(cd Tracker.pak && zip -q -X ../dist/Tracker.pak.zip tracker launch.sh DMMono-Light.ttf DMMono-Regular.ttf DMMono-Medium.ttf LICENSE-DMMono.txt LICENSE-libxmp.txt)
+(cd Tracker.pak && zip -q -X ../dist/Tracker.pak.zip tracker launch.sh GeistMono-Regular.ttf GeistMono-Medium.ttf GeistMono-Bold.ttf LICENSE-GeistMono.txt LICENSE-libxmp.txt)
 unzip -l dist/Tracker.pak.zip

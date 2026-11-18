@@ -1,4 +1,5 @@
-// Drawing for the Line look: sage paper, ink, DM Mono in three weights, thin rules.
+// Drawing for the Line look: sage paper, ink, Geist Mono in three weights (W_LIGHT is Regular, W_REG Medium,
+// W_MED Bold: one step heavier than the sketch, for the 3.2" screen), thin rules.
 #pragma once
 #include <SDL2/SDL.h>
 
