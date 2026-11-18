@@ -126,7 +126,7 @@ static void tunnel(const PlayerState *ps, const float *vu, float dt) {
   }
 }
 
-// --- sine scroller --------------------------------------------------------------------------------------------------
+// --- ticker ---------------------------------------------------------------------------------------------------------
 static char scroll[2048];
 static const struct xmp_module *scroll_for;
 static float scroll_x;
@@ -148,19 +148,22 @@ static void build_scroll(const struct xmp_module *m) {
   scroll_for = m; scroll_x = 1024;
 }
 
+// A plain ticker between two rules, like a news line: the title, then the sample names.
 static void scroller(const struct xmp_module *m, float dt, int paused) {
   if (m != scroll_for) build_scroll(m);
-  int adv = text_w("M", 48, W_MED);
+  rule(0, 1024, 666, C_RULE);
+  rule(0, 1024, 742, C_RULE);
+  int adv = text_w("M", 34, W_REG);
   int len = (int)strlen(scroll);
-  if (!paused) scroll_x -= dt * 170;
+  if (!paused) scroll_x -= dt * 110;
   if (scroll_x < -(float)(len * adv)) scroll_x = 1024;
-  for (int i = 0; i < len; i++) {
-    float x = scroll_x + i * adv;
-    if (x < -adv || x > 1024) continue;
+  int first = scroll_x < 0 ? (int)(-scroll_x / adv) : 0;
+  for (int i = first; i < len; i++) {
+    int x = (int)(scroll_x + i * adv);
+    if (x > 1024) break;
     if (scroll[i] == ' ') continue;
     char c[2] = { scroll[i], 0 };
-    float y = 716 + sinf(x * .011f + clock_s * 2.6f) * (12 + pulse * 20);
-    text((int)x, (int)y, c, 48, W_MED, C_INK, A_LEFT);
+    text(x, 716, c, 34, W_REG, C_INK, A_LEFT);
   }
 }
 

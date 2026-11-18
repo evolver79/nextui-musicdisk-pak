@@ -1,4 +1,4 @@
-// Demo screen: line-art demo effects (starfield, donut, tunnel) driven by the song, over a sine scroller with the
+// Demo screen: line-art demo effects (starfield, donut, tunnel) driven by the song, over a ticker with the
 // song's title and sample names.
 #pragma once
 #include "player.h"

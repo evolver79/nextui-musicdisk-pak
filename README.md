@@ -4,7 +4,7 @@ Plays MOD, S3M, XM, IT and about 90 other musicdisk formats on the TrimUI Brick 
 straight from [scene.org](https://www.scene.org)'s file mirror. Playback is [libxmp](https://github.com/libxmp/libxmp).
 
 - **Now playing:** title, time, and a VU line per channel.
-- **Demo:** line-art demo effects (starfield, donut, tunnel) that move with the song, over a sine scroller with the
+- **Demo:** line-art demo effects (starfield, donut, tunnel) that move with the song, over a ticker with the
   title and the sample names. A new effect every four song positions; ◄ ► to switch.
 - **Pattern:** the song's pattern as it plays, four channels at a time, named by their instruments.
 - **Scopes:** real per-channel scopes, drawn from each channel's sample data at its play position.
