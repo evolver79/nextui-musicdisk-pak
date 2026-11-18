@@ -1,14 +1,19 @@
 #!/bin/sh
-# Builds Tracker and copies it to the Brick over SSH (turn SSH on in the Brick's settings first).
-# Usage: ./deploy.sh [ip] [password]     defaults: 192.168.68.167, tina
+# Builds Tracker and copies it to the Brick over SSH (turn SSH on in the Brick first: Tools > SSH Server).
+# Usage: ./deploy.sh [ip] [password]     defaults: 192.168.68.196, tina
 set -e
 cd "$(dirname "$0")"
-IP="${1:-192.168.68.167}"; PASS="${2:-tina}"
+IP="${1:-192.168.68.196}"; PASS="${2:-tina}"
 DIR="/mnt/SDCARD/Tools/tg5040/Tracker.pak"
-OPTS="-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null"
-run() { expect -c "set timeout 120; spawn $*; expect { \"password:\" { send \"$PASS\r\"; exp_continue } eof }"; }
+# ssh reads the password from an askpass helper, so no prompt or expect is needed.
+ASK="$(mktemp)"; printf '#!/bin/sh\necho "%s"\n' "$PASS" > "$ASK"; chmod +x "$ASK"
+trap 'rm -f "$ASK"' EXIT
+export SSH_ASKPASS="$ASK" SSH_ASKPASS_REQUIRE=force DISPLAY="${DISPLAY:-x}"
+OPTS="-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR -o ConnectTimeout=10"
 build/build.sh
 cp build/out/tracker Tracker.pak/tracker
-run ssh $OPTS root@$IP "mkdir -p $DIR /mnt/SDCARD/Music"
-run scp $OPTS Tracker.pak/tracker Tracker.pak/launch.sh Tracker.pak/DMMono-Light.ttf Tracker.pak/DMMono-Regular.ttf Tracker.pak/DMMono-Medium.ttf root@$IP:$DIR/
+ssh $OPTS root@$IP "mkdir -p '$DIR' /mnt/SDCARD/Music; rm -f '$DIR/tracker'"
+# the Brick has no scp: the files go over as a tar stream
+COPYFILE_DISABLE=1 tar -C Tracker.pak -cf - tracker launch.sh DMMono-Light.ttf DMMono-Regular.ttf DMMono-Medium.ttf | ssh $OPTS root@$IP "tar -xf - -C '$DIR'"
+ssh $OPTS root@$IP "chmod +x '$DIR/tracker' '$DIR/launch.sh'; ls -la '$DIR'"
 echo "Done. Open Tools > Tracker on the Brick."
