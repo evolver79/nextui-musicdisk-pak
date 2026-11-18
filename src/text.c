@@ -46,9 +46,12 @@ void diz_parse(const char *text, char *title, size_t tn, char *artist, size_t an
     p = e ? e + 1 : p + len; lines++;
     if (!l[0]) continue;
     if (!title[0]) {
-      const char *by = strcasestr(l, " by ");
-      if (by) { copy_trim(title, tn, l, by - l); copy_trim(artist, an, by + 4, strlen(by + 4)); }
-      else copy_trim(title, tn, l, strlen(l));
+      char *t = l;
+      if (*t == '(' || *t == '[') { char *close = strchr(t, *t == '(' ? ')' : ']'); if (close) { t = close + 1; while (*t == ' ') t++; } }   // "(MOD) ..."
+      const char *by = strcasestr(t, " by "), *colon = strstr(t, " : ");
+      if (by) { copy_trim(title, tn, t, by - t); copy_trim(artist, an, by + 4, strlen(by + 4)); }
+      else if (colon) { copy_trim(artist, an, t, colon - t); copy_trim(title, tn, colon + 3, strlen(colon + 3)); }   // Artist : Title
+      else copy_trim(title, tn, t, strlen(t));
       if (artist[0]) return;
     } else {
       if (!strncasecmp(l, "by ", 3)) copy_trim(artist, an, l + 3, strlen(l + 3));
@@ -59,22 +62,38 @@ void diz_parse(const char *text, char *title, size_t tn, char *artist, size_t an
 
 static void lower(const char *s, char *out, size_t n) { size_t i = 0; for (; s[i] && i + 1 < n; i++) out[i] = (char)tolower((unsigned char)s[i]); out[i] = 0; }
 
-int results_rank(const char *results, const char *title, const char *file) {
+// needle in hay as whole words: "lumi" doesn't match "illumination"
+static int word_in(const char *hay, const char *needle) {
+  size_t n = strlen(needle);
+  if (!n) return 0;
+  for (const char *p = hay; (p = strstr(p, needle)); p++) {
+    int before = p == hay || !isalnum((unsigned char)p[-1]), after = !isalnum((unsigned char)p[n]);
+    if (before && after) return 1;
+  }
+  return 0;
+}
+
+int results_rank(const char *results, const char *title, const char *file, int only_section, int *section) {
+  if (section) *section = -1;
   char t[128] = "", f[128] = "";
   if (title && strlen(title) >= 4) lower(title, t, sizeof t);
   if (file) { lower(file, f, sizeof f); char *dot = strrchr(f, '.'); if (dot) *dot = 0; if (strlen(f) < 4) f[0] = 0; }
   if (!t[0] && !f[0]) return 0;
+  int sec = 0;
   for (const char *p = results; *p; ) {
     const char *e = strchr(p, '\n'); size_t len = e ? (size_t)(e - p) : strlen(p);
     char l[300]; lower(p, l, len + 1 < sizeof l ? len + 1 : sizeof l);
     p = e ? e + 1 : p + len;
-    if (!((t[0] && strstr(l, t)) || (f[0] && strstr(l, f)))) continue;
     const char *q = l; while (*q == ' ' || *q == '\t') q++;
+    int has_letters = 0; for (const char *c = q; *c; c++) if (isalpha((unsigned char)*c)) { has_letters = 1; break; }
+    if (!isdigit((unsigned char)*q) && has_letters) { sec++; continue; }   // a heading: the next compo's list
+    if (only_section >= 0 && sec != only_section) continue;
+    if (!(word_in(l, t) || word_in(l, f))) continue;
     if (!isdigit((unsigned char)*q)) continue;
     int rank = atoi(q);
     while (isdigit((unsigned char)*q)) q++;
     if (*q == '.' || *q == ')' || *q == ' ' || *q == '\t' || !strncmp(q, "st", 2) || !strncmp(q, "nd", 2) || !strncmp(q, "rd", 2) || !strncmp(q, "th", 2))
-      if (rank > 0 && rank < 200) return rank;
+      if (rank > 0 && rank < 200) { if (section) *section = sec; return rank; }
   }
   return 0;
 }

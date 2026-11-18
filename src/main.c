@@ -16,6 +16,7 @@
 #include "text.h"
 #include "zipx.h"
 #include <ctype.h>
+#include <time.h>
 
 // Pad buttons in the Brick's own names (it reports an Xbox layout with Nintendo labels).
 enum { BTN_A = SDL_CONTROLLER_BUTTON_B, BTN_B = SDL_CONTROLLER_BUTTON_A, BTN_X = SDL_CONTROLLER_BUTTON_Y,
@@ -42,7 +43,7 @@ static char toast_msg[128]; static Uint32 toast_until;
 static void toast(const char *m) { snprintf(toast_msg, sizeof toast_msg, "%s", m); toast_until = SDL_GetTicks() + 2600; }
 
 // --- sources and folders -----------------------------------------------------------------------------------------
-typedef struct { char path[1024]; Listing list; int cursor, top; } Level;
+typedef struct { char path[1024]; Listing list; int cursor, top; char *results; int results_state, ranked; } Level;   // results: the party's results.txt, in compo folders
 typedef struct { const char *name; char root[700]; int remote, cache; Level lv[24]; int depth, loading, failed; } Source;
 static Source src[4];
 static int cur_src;
@@ -56,27 +57,33 @@ static int del_index = -1; static Uint32 del_until;   // X twice deletes a downl
 // --- playlist: the playable files of the folder a song was started from --------------------------------------------
 typedef struct { char url[1200]; char name[192]; char title[96], artist[64]; int remote; } Item;
 static Item *pl; static int pl_n, pl_i = -1, pl_src;
+static int pl_random;   // endless random: when the song ends, another random one from scene.org
 static char now_name[192], now_title[96], now_artist[64];
 
 // --- background job: one folder listing or one download at a time ---------------------------------------------------
-typedef enum { JOB_NONE, JOB_LIST, JOB_GET } JobKind;
+typedef enum { JOB_NONE, JOB_LIST, JOB_GET, JOB_RANDOM } JobKind;
 static struct {
   JobKind kind; volatile int done; int ok;
   char url[1200], path[1100];
   volatile long got, total;
   Listing list; int src, depth, play_index;
+  volatile int picked;                          // random: a song has been chosen and is downloading
+  char title[96], artist[64], name[192], where[160];
 } job;
+static void cache_path_for(const char *url, char *out, size_t n);
+static int random_song(void);
 
 static void on_progress(long got, long total, void *ud) { (void)ud; job.got = got; job.total = total; }
 static int job_thread(void *arg) {
   (void)arg;
   if (job.kind == JOB_LIST) job.ok = list_remote(job.url, &job.list) == 0;
+  else if (job.kind == JOB_RANDOM) job.ok = random_song();
   else job.ok = http_get_file(job.url, job.path, on_progress, NULL);
   job.done = 1;
   return 0;
 }
 static int job_busy(void) { return job.kind != JOB_NONE; }
-static void job_start(void) { job.done = 0; job.got = 0; job.total = -1; SDL_DetachThread(SDL_CreateThread(job_thread, "job", NULL)); }
+static void job_start(void) { job.done = 0; job.got = 0; job.total = -1; job.picked = 0; SDL_DetachThread(SDL_CreateThread(job_thread, "job", NULL)); }
 
 
 static void open_level(Source *s) {
@@ -98,6 +105,7 @@ static void enter_dir(Source *s, const Entry *e) {
   if (s->remote) snprintf(to->path, sizeof to->path, "%s%s", from->path, e->href);
   else snprintf(to->path, sizeof to->path, "%s/%s", from->path, e->href);
   memset(&to->list, 0, sizeof to->list); to->cursor = to->top = 0;
+  free(to->results); to->results = NULL; to->results_state = to->ranked = 0;
   s->depth++;
   open_level(s);
 }
@@ -105,7 +113,8 @@ static void enter_dir(Source *s, const Entry *e) {
 static void leave_dir(Source *s) {
   if (s->depth == 0) return;
   if (s->loading) return;
-  listing_free(&s->lv[s->depth].list);
+  Level *l = &s->lv[s->depth];
+  listing_free(&l->list); free(l->results); l->results = NULL; l->results_state = l->ranked = 0;
   s->depth--; s->failed = 0;
 }
 
@@ -223,7 +232,7 @@ static void play_index(int i) {
 
 static void play_from_listing(Source *s, int index) {
   Level *l = &s->lv[s->depth];
-  free(pl); pl = calloc(l->list.n, sizeof *pl); pl_n = 0; pl_src = (int)(s - src);
+  free(pl); pl = calloc(l->list.n, sizeof *pl); pl_n = 0; pl_src = (int)(s - src); pl_random = 0;
   int start = 0;
   for (int i = 0; i < l->list.n; i++) {
     Entry *e = &l->list.e[i];
@@ -239,6 +248,53 @@ static void play_from_listing(Source *s, int index) {
     snprintf(it->artist, sizeof it->artist, "%s", e->artist);
   }
   play_index(start);
+}
+
+// --- random: down through scene.org's folders by chance, to a song (at parties: year, party, a music compo) ----------
+static int random_song(void) {
+  int parties = job.src == 2;
+  for (int attempt = 0; attempt < 10; attempt++) {
+    char cur[1200]; snprintf(cur, sizeof cur, "%s", src[job.src].root);
+    for (int depth = 0; depth < 7; depth++) {
+      Listing l = {0};
+      if (list_remote(cur, &l) != 0) { listing_free(&l); return 0; }   // offline
+      int nd = 0, nf = 0, nm = 0;
+      for (int i = 0; i < l.n; i++) { if (l.e[i].dir) { nd++; nm += l.e[i].music; } else nf++; }
+      int deep = depth >= (parties ? 3 : 1);   // parties: only songs inside a compo folder, not the root's files
+      if (nf && deep && (!nd || rand() % 3)) {
+        int k = rand() % nf;
+        for (int i = 0; i < l.n; i++) if (!l.e[i].dir && k-- == 0) {
+          Entry *e = &l.e[i];
+          snprintf(job.url, sizeof job.url, "%s%s", cur, e->href);
+          snprintf(job.name, sizeof job.name, "%s", e->name);
+          url_decode(cur + strlen(SCENE) + 5, job.where, sizeof job.where);
+          if (e->diz[0]) {   // its title and artist, from the .diz beside it
+            char du[1500], dp[1200]; snprintf(du, sizeof du, "%s%s", cur, e->diz); cache_path_for(du, dp, sizeof dp);
+            if (http_get_file(du, dp, NULL, NULL)) { char *t = read_text_file(dp, 16384); if (t) { diz_parse(t, job.title, sizeof job.title, job.artist, sizeof job.artist); free(t); } }
+          }
+          break;
+        }
+        listing_free(&l);
+        cache_path_for(job.url, job.path, sizeof job.path);
+        job.picked = 1;
+        struct stat st;
+        if (stat(job.path, &st) == 0 && st.st_size > 0) return 1;
+        return http_get_file(job.url, job.path, on_progress, NULL);
+      }
+      if (!nd || (parties && depth == 2 && !nm)) { listing_free(&l); break; }   // a dead end: start over   // a party without music: start over
+      int want_music = parties && nm, k = rand() % (want_music ? nm : nd);
+      for (int i = 0; i < l.n; i++) if (l.e[i].dir && (!want_music || l.e[i].music) && k-- == 0) { strncat(cur, l.e[i].href, sizeof cur - strlen(cur) - 1); break; }
+      listing_free(&l);
+    }
+  }
+  return 0;
+}
+
+static void start_random(int s) {
+  if (job_busy()) { toast("Still busy, try again in a moment"); return; }
+  job.kind = JOB_RANDOM; job.src = s;
+  job.title[0] = job.artist[0] = job.name[0] = job.where[0] = 0;
+  job_start();
 }
 
 static void job_poll(void) {
@@ -258,6 +314,14 @@ static void job_poll(void) {
   } else if (k == JOB_GET) {
     if (job.ok) { pl_i = job.play_index; start_playing(job.path); open_level(&src[SRC_CACHE]); }
     else toast("Download failed");
+  } else if (k == JOB_RANDOM) {
+    if (!job.ok) { toast("Couldn't find a random song"); return; }
+    free(pl); pl = calloc(1, sizeof *pl); pl_n = 1; pl_i = 0; pl_src = job.src; pl_random = 1;
+    Item *it = &pl[0]; it->remote = 1;
+    snprintf(it->url, sizeof it->url, "%s", job.url); snprintf(it->name, sizeof it->name, "%s", job.name);
+    snprintf(it->title, sizeof it->title, "%s", job.title); snprintf(it->artist, sizeof it->artist, "%s", job.artist[0] ? job.artist : job.where);
+    start_playing(job.path);
+    open_level(&src[SRC_CACHE]);
   }
 }
 
@@ -271,29 +335,80 @@ static void diz_read(Entry *e, const char *path) {
   e->diz_state = 2;
 }
 
+static int by_rank(const void *a, const void *b) {
+  const Entry *x = a, *y = b;
+  if (x->dir != y->dir) return y->dir - x->dir;
+  if (x->rank && y->rank) return x->rank - y->rank;
+  if (x->rank || y->rank) return x->rank ? -1 : 1;
+  return strcasecmp(x->name, y->name);
+}
+
+// Every song's place from results.txt; the folder is then sorted first to last, so A plays the compo in order.
+static void rank_compo(Level *l) {
+  l->ranked = 1;
+  if (!l->results) return;
+  // which compo list in results.txt holds most of this folder's songs
+  static int votes[512]; memset(votes, 0, sizeof votes);
+  int best = -1;
+  for (int i = 0; i < l->list.n; i++) {
+    int sec; if (l->list.e[i].dir || !results_rank(l->results, l->list.e[i].title, l->list.e[i].name, -1, &sec) || sec < 0 || sec >= 512) continue;
+    if (++votes[sec] > (best >= 0 ? votes[best] : 0)) best = sec;
+  }
+  int changed = 0;
+  for (int i = 0; i < l->list.n; i++) {
+    Entry *e = &l->list.e[i];
+    if (e->dir) continue;
+    int r = best >= 0 ? results_rank(l->results, e->title, e->name, best, NULL) : 0;
+    if (r != e->rank) { e->rank = r; changed = 1; }
+  }
+  if (!changed) return;
+  char keep[384] = ""; if (l->cursor < l->list.n) snprintf(keep, sizeof keep, "%s", l->list.e[l->cursor].href);
+  qsort(l->list.e, l->list.n, sizeof *l->list.e, by_rank);
+  for (int i = 0; i < l->list.n; i++) if (!strcmp(l->list.e[i].href, keep)) l->cursor = i;
+}
+
 static void diz_pump(void) {
   Source *s = &src[cur_src];
   if (dz.busy) {
     if (!dz.done) return;
     dz.busy = 0;
+    for (int d = 0; d <= s->depth; d++) if (s->lv[d].results_state == 1) {   // it was the results.txt
+      Level *rl = &s->lv[d];
+      rl->results = dz.ok ? read_text_file(dz.path, 1 << 20) : NULL;
+      rl->results_state = rl->results ? 2 : 3;
+    }
     for (int d = 0; d <= s->depth; d++) for (int i = 0; i < s->lv[d].list.n; i++) {
       Entry *e = &s->lv[d].list.e[i];
       if (e->diz_state != 1) continue;
       char u[1500]; snprintf(u, sizeof u, "%s%s", s->lv[d].path, e->diz);
       if (strcmp(u, dz.url)) continue;
       if (dz.ok) diz_read(e, dz.path); else e->diz_state = 3;
+      s->lv[d].ranked = 0;
     }
   }
   if (!s->remote || s->loading) return;
   Level *l = &s->lv[s->depth];
-  int from = l->top, to = l->top + ROWS * 2;
+  int files = 0; for (int i = 0; i < l->list.n; i++) files += !l->list.e[i].dir;
+  int compo = cur_src == 2 && files > 0;   // a folder of songs at a party: a compo, to be put in placing order
+  if (compo && !l->results_state) {   // the party's results.txt, one folder up
+    char u[1200]; snprintf(u, sizeof u, "%s", l->path);
+    size_t n = strlen(u); if (n && u[n - 1] == '/') u[--n] = 0;
+    char *slash = strrchr(u, '/'); if (slash) slash[1] = 0;
+    strncat(u, "results.txt", sizeof u - strlen(u) - 1);
+    char p[1200]; cache_path_for(u, p, sizeof p);
+    struct stat st;
+    if (stat(p, &st) == 0) { l->results = read_text_file(p, 1 << 20); l->results_state = 2; }
+    else { l->results_state = 1; dz.busy = 1; dz.done = 0; snprintf(dz.url, sizeof dz.url, "%s", u); snprintf(dz.path, sizeof dz.path, "%s", p); SDL_DetachThread(SDL_CreateThread(dz_thread, "results", NULL)); return; }
+  }
+  if (compo && !l->ranked && l->results_state >= 2) rank_compo(l);   // again each time a title comes in
+  int from = compo ? 0 : l->top, to = compo ? l->list.n : l->top + ROWS * 2;
   for (int k = from, local = 0; k < to && k < l->list.n && local < 40; k++) {
     Entry *e = &l->list.e[k];
     if (e->dir || e->diz_state) continue;
     char u[1500], p[1200]; snprintf(u, sizeof u, "%s%s", l->path, e->diz);
     cache_path_for(u, p, sizeof p);
     struct stat st;
-    if (stat(p, &st) == 0) { diz_read(e, p); local++; continue; }   // read before, kept in the cache
+    if (stat(p, &st) == 0) { diz_read(e, p); l->ranked = 0; local++; continue; }   // read before, kept in the cache
     e->diz_state = 1; dz.busy = 1; dz.done = 0;
     snprintf(dz.url, sizeof dz.url, "%s", u); snprintf(dz.path, sizeof dz.path, "%s", p);
     SDL_DetachThread(SDL_CreateThread(dz_thread, "diz", NULL));
@@ -403,7 +518,8 @@ static void draw_now(const struct xmp_module *m) {
   char a[200], b[200];
   ext_upper(now_name, b, sizeof b);
   snprintf(a, sizeof a, ps.paused ? "PAUSED" : "%s · %d ch", b, ps.nch);
-  top_bar(a, src[pl_src].name);
+  char where[64]; snprintf(where, sizeof where, pl_random ? "Random · %s" : "%s", src[pl_src].name);
+  top_bar(a, where);
   char title[100]; song_title(m, title, sizeof title);
   fit(a, sizeof a, title, X1 - X0, 80, W_REG, 0);
   text(X0, 172, a, 80, W_REG, C_INK, A_LEFT);
@@ -526,7 +642,7 @@ static void draw_browse(void) {
     int sel = k == l->cursor;
     char sz[200];
     if (e->dir) snprintf(sz, sizeof sz, "%s", sel ? "->" : e->music ? "music" : "/");
-    else if (e->rank) snprintf(sz, sizeof sz, "#%d", e->rank);
+    else if (e->rank) { char r[100]; snprintf(r, sizeof r, "#%d  %s", e->rank, e->artist); fit(sz, sizeof sz, r, 360, 24, W_REG, 0); }
     else if (s->cache) fit(sz, sizeof sz, e->artist[0] ? e->artist : e->where, 360, 24, W_REG, 1);
     else if (e->artist[0]) fit(sz, sizeof sz, e->artist, 330, 24, W_REG, 0);
     else size_str(e->size, sz, sizeof sz);
@@ -539,7 +655,8 @@ static void draw_browse(void) {
     rule(X0, X1, y, sel || k == l->cursor - 1 ? C_INK : C_RULE);
   }
   // the bottom line: a download, or what's playing
-  if (job.kind == JOB_GET) {
+  if (job.kind == JOB_RANDOM && !job.picked) bottom_line("Finding a random song....", NULL);
+  else if (job.kind == JOB_GET || job.kind == JOB_RANDOM) {
     const char *slash = strrchr(job.url, '/');
     url_decode(slash ? slash + 1 : job.url, b, sizeof b);
     fit(a, sizeof a, b, 560, 26, W_MED, 0);
@@ -620,6 +737,15 @@ static void on_button(int b) {
         if (!t->remote ? t->depth == 0 : (!t->lv[0].list.n && !t->loading)) open_level(t);
         break;
       }
+      case BTN_Y:
+        if (s->remote) start_random(cur_src);
+        else if (n) {   // the card and downloads: this list, shuffled
+          play_from_listing(s, l->cursor);
+          for (int i = pl_n - 1; i > 0; i--) { int j = rand() % (i + 1); Item t = pl[i]; pl[i] = pl[j]; pl[j] = t; }
+          play_index(0);
+          toast("Shuffled");
+        }
+        break;
       case BTN_X:
         if (!s->cache || !n) break;
         if (del_index == l->cursor && SDL_GetTicks() < del_until) {
@@ -643,7 +769,7 @@ static void on_button(int b) {
     case BTN_SELECT: screen = screen == SCR_NOW ? SCR_DEMO : screen == SCR_DEMO ? SCR_PATTERN : screen == SCR_PATTERN ? SCR_SCOPES : SCR_NOW; break;
     case BTN_A: if (ps.loaded) player_pause(!ps.paused); break;
     case BTN_L1: if (pl_i > 0) play_index(pl_i - 1); break;
-    case BTN_R1: if (pl_i + 1 < pl_n) play_index(pl_i + 1); break;
+    case BTN_R1: if (pl_i + 1 < pl_n) play_index(pl_i + 1); else if (pl_random) start_random(pl_src); break;
     case BTN_LEFT: if (screen == SCR_DEMO) demo_part = (demo_part + DEMO_PARTS - 1) % DEMO_PARTS; if (screen == SCR_PATTERN && pat_page > 0) pat_page--; if (screen == SCR_SCOPES && scope_sel > 0) scope_sel--; break;
     case BTN_RIGHT: if (screen == SCR_DEMO) demo_part = (demo_part + 1) % DEMO_PARTS; if (screen == SCR_PATTERN && (pat_page + 1) * 4 < ps.nch) pat_page++; if (screen == SCR_SCOPES && scope_sel + 1 < ps.nch) scope_sel++; break;
     case BTN_UP: if (screen == SCR_SCOPES && scope_sel >= 2) scope_sel -= 2; break;
@@ -672,8 +798,12 @@ static void shots(const char *dir, const char *module) {
   cur_src = 2; snprintf(src[2].lv[0].path, sizeof src[2].lv[0].path, SCENE "/pub/parties/1995/assembly95/m4ch/");
   open_level(&src[2]);
   while (job_busy()) { SDL_Delay(50); job_poll(); }
-  for (int i = 0; i < 400; i++) { diz_pump(); if (!dz.busy) { int left = 0; Level *l = &src[2].lv[0]; for (int k = 0; k < ROWS && k < l->list.n; k++) if (!l->list.e[k].diz_state) left = 1; if (!left) break; } SDL_Delay(30); }
+  for (int i = 0; i < 3000; i++) { diz_pump(); SDL_Delay(20); int left = 0; for (int k = 0; k < src[2].lv[0].list.n; k++) if (src[2].lv[0].list.e[k].diz_state < 2) left = 1; if (!left && src[2].lv[0].ranked) break; }
+  src[2].lv[0].cursor = 0;
   draw(); save_shot(dir, "compo");
+  // a random song from the parties
+  start_random(2);
+  while (job_busy()) { SDL_Delay(50); if (job.done) { fprintf(stderr, "random: %s | %s | %s | %s\n", job.ok ? "ok" : "failed", job.url, job.title, job.artist); job_poll(); } }
   // a party folder: music folders first
   snprintf(src[2].lv[0].path, sizeof src[2].lv[0].path, SCENE "/pub/parties/1995/assembly95/");
   open_level(&src[2]); while (job_busy()) { SDL_Delay(50); job_poll(); }
@@ -736,6 +866,7 @@ int main(int argc, char **argv) {
   open_level(&src[SRC_SD]); open_level(&src[SRC_CACHE]);
   cur_src = SRC_MUSIC; probing = 1; open_level(&src[SRC_MUSIC]);
 
+  srand((unsigned)time(NULL));
   int held = -1; Uint32 repeat_at = 0;
   while (running) {
     SDL_Event e;
@@ -753,7 +884,9 @@ int main(int argc, char **argv) {
     diz_pump();
     player_get(&ps);
     if (ps.loaded && ps.ended && !job_busy()) {   // the song is over: on to the next one in the folder
-      if (pl_i + 1 < pl_n) play_index(pl_i + 1); else { player_unload(); screen = SCR_BROWSE; }
+      if (pl_i + 1 < pl_n) play_index(pl_i + 1);
+      else if (pl_random) { if (!job_busy()) start_random(pl_src); }
+      else { player_unload(); screen = SCR_BROWSE; }
     }
     static Uint32 last_tick; Uint32 now_tick = SDL_GetTicks();
     frame_dt = last_tick ? (now_tick - last_tick) / 1000.f : 1 / 60.f; if (frame_dt > .1f) frame_dt = .1f;
