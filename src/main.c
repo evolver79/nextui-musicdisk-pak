@@ -1,4 +1,4 @@
-// Tracker.pak: a MOD / S3M / XM / IT player for NextUI. Plays from the SD card and from scene.org's mirror,
+// Musicdisk: a MOD / S3M / XM / IT player for NextUI. Plays from the SD card and from scene.org's mirror,
 // in a quiet line look: now playing, the pattern, real scopes, and a file browser.
 #include <SDL2/SDL.h>
 #include <stdio.h>
@@ -10,6 +10,7 @@
 #include "gfx.h"
 #include "http.h"
 #include "player.h"
+#include "demo.h"
 
 // Pad buttons in the Brick's own names (it reports an Xbox layout with Nintendo labels).
 enum { BTN_A = SDL_CONTROLLER_BUTTON_B, BTN_B = SDL_CONTROLLER_BUTTON_A, BTN_X = SDL_CONTROLLER_BUTTON_Y,
@@ -18,7 +19,7 @@ enum { BTN_A = SDL_CONTROLLER_BUTTON_B, BTN_B = SDL_CONTROLLER_BUTTON_A, BTN_X =
        BTN_UP = SDL_CONTROLLER_BUTTON_DPAD_UP, BTN_DOWN = SDL_CONTROLLER_BUTTON_DPAD_DOWN,
        BTN_LEFT = SDL_CONTROLLER_BUTTON_DPAD_LEFT, BTN_RIGHT = SDL_CONTROLLER_BUTTON_DPAD_RIGHT };
 
-enum { SCR_NOW, SCR_PATTERN, SCR_SCOPES, SCR_BROWSE };
+enum { SCR_NOW, SCR_DEMO, SCR_PATTERN, SCR_SCOPES, SCR_BROWSE };
 #define SCENE "https://ftp.scene.org"
 #define X0 56
 #define X1 968
@@ -29,6 +30,8 @@ static char user_dir[700], cache_dir[760];
 static PlayerState ps;
 static float vu[PL_MAXCH];
 static int pat_page, scope_sel;
+static int demo_part, demo_last_pos = -1;   // the demo effect; a new one every four song positions
+static float frame_dt = 1 / 60.f;
 static char toast_msg[128]; static Uint32 toast_until;
 
 static void toast(const char *m) { snprintf(toast_msg, sizeof toast_msg, "%s", m); toast_until = SDL_GetTicks() + 2600; }
@@ -255,7 +258,7 @@ static void bottom_line(const char *left, const char *right) {
 }
 
 static void draw_nothing(void) {
-  top_bar("Tracker", "");
+  top_bar("Musicdisk", "");
   text(X0, 172, "Nothing playing", 64, W_LIGHT, C_INK, A_LEFT);
   text(X0, 230, "Press START to pick a song.", 30, W_REG, C_MUTE, A_LEFT);
   bottom_line(NULL, NULL);
@@ -411,6 +414,13 @@ static void draw(void) {
   if (screen == SCR_BROWSE) draw_browse();
   else if (!m) draw_nothing();
   else if (screen == SCR_NOW) draw_now(m);
+  else if (screen == SCR_DEMO) {
+    if (ps.pos != demo_last_pos) { if (demo_last_pos >= 0 && ps.pos % 4 == 0) demo_part = (demo_part + 1) % DEMO_PARTS; demo_last_pos = ps.pos; }
+    char a[200], t[16]; char title[80]; snprintf(title, sizeof title, "%s", m->name); trim(title);
+    fit(a, sizeof a, title[0] ? title : now_name, 700, 24, W_REG, 0);
+    clock_str(ps.time, t); top_bar(a, t);
+    demo_draw(m, &ps, vu, frame_dt, demo_part);
+  }
   else if (screen == SCR_PATTERN) draw_pattern(m);
   else draw_scopes(m);
 }
@@ -448,12 +458,12 @@ static void on_button(int b) {
   }
   switch (b) {
     case BTN_START: case BTN_B: screen = SCR_BROWSE; break;
-    case BTN_SELECT: screen = screen == SCR_NOW ? SCR_PATTERN : screen == SCR_PATTERN ? SCR_SCOPES : SCR_NOW; break;
+    case BTN_SELECT: screen = screen == SCR_NOW ? SCR_DEMO : screen == SCR_DEMO ? SCR_PATTERN : screen == SCR_PATTERN ? SCR_SCOPES : SCR_NOW; break;
     case BTN_A: if (ps.loaded) player_pause(!ps.paused); break;
     case BTN_L1: if (pl_i > 0) play_index(pl_i - 1); break;
     case BTN_R1: if (pl_i + 1 < pl_n) play_index(pl_i + 1); break;
-    case BTN_LEFT: if (screen == SCR_PATTERN && pat_page > 0) pat_page--; if (screen == SCR_SCOPES && scope_sel > 0) scope_sel--; break;
-    case BTN_RIGHT: if (screen == SCR_PATTERN && (pat_page + 1) * 4 < ps.nch) pat_page++; if (screen == SCR_SCOPES && scope_sel + 1 < ps.nch) scope_sel++; break;
+    case BTN_LEFT: if (screen == SCR_DEMO) demo_part = (demo_part + DEMO_PARTS - 1) % DEMO_PARTS; if (screen == SCR_PATTERN && pat_page > 0) pat_page--; if (screen == SCR_SCOPES && scope_sel > 0) scope_sel--; break;
+    case BTN_RIGHT: if (screen == SCR_DEMO) demo_part = (demo_part + 1) % DEMO_PARTS; if (screen == SCR_PATTERN && (pat_page + 1) * 4 < ps.nch) pat_page++; if (screen == SCR_SCOPES && scope_sel + 1 < ps.nch) scope_sel++; break;
     case BTN_UP: if (screen == SCR_SCOPES && scope_sel >= 2) scope_sel -= 2; break;
     case BTN_DOWN: if (screen == SCR_SCOPES && scope_sel + 2 < ps.nch) scope_sel += 2; break;
     case BTN_X: if (screen != SCR_NOW || 1) player_mute(scope_sel, !player_muted(scope_sel)); break;
@@ -486,6 +496,12 @@ static void shots(const char *dir, const char *module) {
   screen = SCR_NOW; draw(); save_shot(dir, "now");
   screen = SCR_PATTERN; draw(); save_shot(dir, "pattern");
   screen = SCR_SCOPES; scope_sel = 2; draw(); save_shot(dir, "scopes");
+  screen = SCR_DEMO;
+  for (int part = 0; part < DEMO_PARTS; part++) {
+    demo_part = part;
+    for (int f = 0; f < 90; f++) { player_pump(1); player_get(&ps); update_vu(player_module()); gfx_clear(); demo_draw(player_module(), &ps, vu, 1 / 50.f, part); }
+    draw(); char n[32]; snprintf(n, sizeof n, "demo-%d", part); save_shot(dir, n);
+  }
 }
 
 int main(int argc, char **argv) {
@@ -503,7 +519,7 @@ int main(int argc, char **argv) {
   mkdir(src[0].root, 0755);
 
   if (SDL_Init(SDL_INIT_VIDEO | SDL_INIT_AUDIO | SDL_INIT_GAMECONTROLLER) != 0) { fprintf(stderr, "SDL: %s\n", SDL_GetError()); return 1; }
-  SDL_Window *win = SDL_CreateWindow("Tracker", 0, 0, 1024, 768, shots_dir ? 0 : SDL_WINDOW_FULLSCREEN);
+  SDL_Window *win = SDL_CreateWindow("Musicdisk", 0, 0, 1024, 768, shots_dir ? 0 : SDL_WINDOW_FULLSCREEN);
   SDL_Renderer *ren = SDL_CreateRenderer(win, -1, shots_dir ? SDL_RENDERER_SOFTWARE : SDL_RENDERER_ACCELERATED | SDL_RENDERER_PRESENTVSYNC);
   if (!ren) { fprintf(stderr, "renderer: %s\n", SDL_GetError()); return 1; }
   SDL_RenderSetLogicalSize(ren, 1024, 768);
@@ -535,6 +551,9 @@ int main(int argc, char **argv) {
     if (ps.loaded && ps.ended && !job_busy()) {   // the song is over: on to the next one in the folder
       if (pl_i + 1 < pl_n) play_index(pl_i + 1); else { player_unload(); screen = SCR_BROWSE; }
     }
+    static Uint32 last_tick; Uint32 now_tick = SDL_GetTicks();
+    frame_dt = last_tick ? (now_tick - last_tick) / 1000.f : 1 / 60.f; if (frame_dt > .1f) frame_dt = .1f;
+    last_tick = now_tick;
     draw();
     SDL_RenderPresent(ren);
   }

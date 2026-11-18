@@ -8,8 +8,8 @@ const SDL_Color C_BG = { 0xe6, 0xec, 0xe2, 255 }, C_INK = { 0x1d, 0x20, 0x1d, 25
                 C_MUTE = { 0x58, 0x60, 0x57, 255 }, C_RULE = { 0xa9, 0xb2, 0xa7, 255 };
 
 static char font_path[3][700];
-#define NSIZES 8
-static const int SIZES[NSIZES] = { 22, 24, 26, 30, 34, 64, 80, 88 };
+#define NSIZES 9
+static const int SIZES[NSIZES] = { 22, 24, 26, 30, 34, 48, 64, 80, 88 };
 static TTF_Font *fonts[3][NSIZES];
 
 static TTF_Font *font(int size, int weight) {

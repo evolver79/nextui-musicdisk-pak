@@ -10,7 +10,7 @@
 #include <unistd.h>
 
 #define MAX_BODY (64L << 20)
-#define USER_AGENT "Tracker.pak/0.1 (NextUI module player)"
+#define USER_AGENT "Musicdisk/0.1 (NextUI module player)"
 
 typedef struct { int fd; SSL *ssl; } Conn;
 

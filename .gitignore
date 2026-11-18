@@ -2,5 +2,5 @@ deps/*.tar.gz
 build/out/
 dist/
 test/
-Tracker.pak/tracker
+Musicdisk.pak/musicdisk
 .DS_Store
