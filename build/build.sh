@@ -20,7 +20,10 @@ gcc -O2 -Wall -Wno-format-truncation -Wno-format-zero-length -Wno-restrict -o bu
 strip build/out/musicdisk
 echo needs: \$(objdump -p build/out/musicdisk | grep NEEDED | tr -s ' ' | cut -d' ' -f3 | tr '\n' ' ')
 if [ \"\$1\" = --shots ]; then
-  mkdir -p build/out/shots /tmp/u
+  mkdir -p build/out/shots /tmp/u/cache/pub/music/groups/abyss_music
+  cp \"\$2\" /tmp/u/cache/pub_music_artists_bigjim_bj-aday.mod
+  cp \"\$2\" /tmp/u/cache/pub_music_artists_alien_aln_dawn.mod
+  cp \"\$2\" /tmp/u/cache/pub/music/groups/abyss_music/abyss%5Bfinal%5D.mod
   SDL_VIDEODRIVER=dummy SDL_AUDIODRIVER=dummy build/out/musicdisk /tmp/u Musicdisk.pak --shots build/out/shots \"\$2\"
 fi
 " sh "$@"

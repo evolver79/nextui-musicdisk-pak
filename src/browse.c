@@ -112,3 +112,50 @@ int list_remote(const char *url, Listing *l) {
   qsort(l->e, l->n, sizeof *l->e, by_kind_then_name);
   return 0;
 }
+
+void url_decode(const char *in, char *out, size_t n) {
+  size_t o = 0;
+  for (const char *p = in; *p && o + 1 < n; p++) {
+    if (*p == '%' && isxdigit((unsigned char)p[1]) && isxdigit((unsigned char)p[2])) { char h[3] = { p[1], p[2], 0 }; out[o++] = (char)strtol(h, NULL, 16); p += 2; }
+    else out[o++] = *p;
+  }
+  out[o] = 0;
+}
+
+static void walk(const char *root, const char *rel, Listing *l, int depth) {
+  char dir[1100];
+  if (rel[0]) snprintf(dir, sizeof dir, "%s/%s", root, rel); else snprintf(dir, sizeof dir, "%s", root);
+  DIR *d = opendir(dir);
+  if (!d) return;
+  struct dirent *de;
+  while ((de = readdir(d))) {
+    if (de->d_name[0] == '.') continue;
+    char full[1400]; snprintf(full, sizeof full, "%s/%s", dir, de->d_name);
+    struct stat st;
+    if (stat(full, &st) != 0) continue;
+    if (S_ISDIR(st.st_mode)) {
+      if (depth < 12) { char r2[700]; if (rel[0]) snprintf(r2, sizeof r2, "%s/%s", rel, de->d_name); else snprintf(r2, sizeof r2, "%s", de->d_name); walk(root, r2, l, depth + 1); }
+      continue;
+    }
+    if (!playable_name(de->d_name)) continue;
+    Entry *e = add(l);
+    url_decode(de->d_name, e->name, sizeof e->name);
+    snprintf(e->href, sizeof e->href, "%s", full);
+    e->size = st.st_size; e->mtime = st.st_mtime;
+    if (!rel[0]) snprintf(e->where, sizeof e->where, "earlier download");
+    else { char w[700]; url_decode(!strncmp(rel, "pub/", 4) ? rel + 4 : rel, w, sizeof w); snprintf(e->where, sizeof e->where, "%s", w); }
+  }
+  closedir(d);
+}
+
+static int newest_first(const void *a, const void *b) {
+  const Entry *x = a, *y = b;
+  return x->mtime < y->mtime ? 1 : x->mtime > y->mtime ? -1 : strcasecmp(x->name, y->name);
+}
+
+int list_cache(const char *cache_dir, Listing *l) {
+  listing_free(l);
+  walk(cache_dir, "", l, 0);
+  qsort(l->e, l->n, sizeof *l->e, newest_first);
+  return 0;
+}

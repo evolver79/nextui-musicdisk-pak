@@ -9,8 +9,10 @@ straight from [scene.org](https://www.scene.org)'s file mirror. Playback is [lib
   title and the sample names. A new effect every four song positions; ◄ ► to switch.
 - **Pattern:** the song's pattern as it plays, four channels at a time, named by their instruments.
 - **Scopes:** real per-channel scopes, drawn from each channel's sample data at its play position.
-- **Browse:** the SD card's `Music` folder, scene.org's `/pub/music/` and `/pub/parties/`. Zipped modules play
-  directly, and downloads are cached.
+- **Browse:** the SD card's `Music` folder, scene.org's `/pub/music/` and `/pub/parties/`, and **Downloaded**: every
+  song fetched from scene.org, newest first, with the folder it came from. Zipped modules play directly. Downloads
+  stay in the cache (`.userdata/tg5040/Musicdisk/cache`, by their path on scene.org) and play offline; X twice
+  deletes one. Without internet, Musicdisk opens on Downloaded.
 
 ## Buttons
 
@@ -20,7 +22,7 @@ straight from [scene.org](https://www.scene.org)'s file mirror. Playback is [lib
 | B | to browse | up a folder |
 | L1 / R1 | previous / next song | page up / down |
 | ◄ ► | effect (demo), channel page (pattern), channel (scopes) | switch source |
-| X / Y | mute / solo the selected channel | |
+| X / Y | mute / solo the selected channel | X twice: delete a download (Downloaded) |
 | SELECT | next screen: now playing, demo, pattern, scopes | |
 | START | to browse | back to the player |
 | MENU | quit | quit |

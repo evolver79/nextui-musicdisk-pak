@@ -6,6 +6,8 @@
 #include <string.h>
 #include <strings.h>
 #include <sys/stat.h>
+#include <dirent.h>
+#include <unistd.h>
 #include "browse.h"
 #include "gfx.h"
 #include "http.h"
@@ -38,11 +40,15 @@ static void toast(const char *m) { snprintf(toast_msg, sizeof toast_msg, "%s", m
 
 // --- sources and folders -----------------------------------------------------------------------------------------
 typedef struct { char path[1024]; Listing list; int cursor, top; } Level;
-typedef struct { const char *name; char root[700]; int remote; Level lv[24]; int depth, loading, failed; } Source;
-static Source src[3];
+typedef struct { const char *name; char root[700]; int remote, cache; Level lv[24]; int depth, loading, failed; } Source;
+static Source src[4];
 static int cur_src;
-static int probing;   // the first scene.org listing at start: when it fails, we fall back to the SD card
-#define NSRC 3
+static int probing;
+static int del_index = -1; static Uint32 del_until;   // X twice deletes a download   // the first scene.org listing at start: when it fails, we fall back to the SD card
+#define NSRC 4
+#define SRC_SD 0
+#define SRC_MUSIC 1
+#define SRC_CACHE 3
 
 // --- playlist: the playable files of the folder a song was started from --------------------------------------------
 typedef struct { char url[1200]; char name[192]; int remote; } Item;
@@ -69,18 +75,11 @@ static int job_thread(void *arg) {
 static int job_busy(void) { return job.kind != JOB_NONE; }
 static void job_start(void) { job.done = 0; job.got = 0; job.total = -1; SDL_DetachThread(SDL_CreateThread(job_thread, "job", NULL)); }
 
-static void url_decode(const char *in, char *out, size_t n) {
-  size_t o = 0;
-  for (const char *p = in; *p && o + 1 < n; p++) {
-    if (*p == '%' && p[1] && p[2]) { char h[3] = { p[1], p[2], 0 }; out[o++] = (char)strtol(h, NULL, 16); p += 2; }
-    else out[o++] = *p;
-  }
-  out[o] = 0;
-}
 
 static void open_level(Source *s) {
   Level *l = &s->lv[s->depth];
   s->failed = 0;
+  if (s->cache) { s->failed = list_cache(s->root, &l->list) != 0; return; }
   if (!s->remote) { s->failed = list_local(l->path, &l->list) != 0; return; }
   if (job_busy()) { toast("Still busy, try again in a moment"); return; }
   s->loading = 1;
@@ -107,13 +106,55 @@ static void leave_dir(Source *s) {
   s->depth--; s->failed = 0;
 }
 
-// Remote files are kept in the cache under their path on the mirror, so a second play needs no download.
+// Downloads are kept under their path on the server (cache/pub/music/artists/...), so the Downloaded list can say
+// where each one came from, and a second play needs no download.
+static void mkdirs_for(const char *file) {
+  char p[1200]; snprintf(p, sizeof p, "%s", file);
+  for (char *s = p + 1; *s; s++) if (*s == '/') { *s = 0; mkdir(p, 0755); *s = '/'; }
+}
+
 static void cache_path_for(const char *url, char *out, size_t n) {
-  const char *p = strncmp(url, SCENE, strlen(SCENE)) ? url : url + strlen(SCENE);
-  char flat[700]; size_t o = 0;
-  for (; *p && o + 1 < sizeof flat; p++) flat[o++] = (*p == '/' || *p == '?' || *p == '&' || *p == ':') ? '_' : *p;
-  flat[o] = 0;
-  snprintf(out, n, "%s/%s", cache_dir, flat + (flat[0] == '_'));
+  const char *host = strstr(url, "://"); host = host ? host + 3 : url;
+  const char *path = strchr(host, '/'); if (!path) path = "/index";
+  char clean[1100]; size_t o = 0;
+  for (const char *p = path; *p && o + 1 < sizeof clean; p++) clean[o++] = (*p == '?' || *p == '&' || *p == ':' || *p == '=') ? '_' : *p;
+  clean[o] = 0;
+  if (!strncmp(url, SCENE, strlen(SCENE))) snprintf(out, n, "%s%s", cache_dir, clean);
+  else snprintf(out, n, "%s/%.*s%s", cache_dir, (int)(path - host), host, clean);
+  mkdirs_for(out);
+}
+
+// Version 0.1 kept downloads flat (pub_music_artists_alien_aln_dawn.zip). They move into folders here; a folder
+// name with an underscore can't be told apart from the file name, so the first part after the category is taken.
+static void migrate_cache(void) {
+  static const char *CATS[] = { "artists", "compilations", "compos", "disks", "groups", NULL };
+  DIR *d = opendir(cache_dir);
+  if (!d) return;
+  struct dirent *de;
+  while ((de = readdir(d))) {
+    if (strncmp(de->d_name, "pub_music_", 10)) continue;
+    const char *rest = de->d_name + 10;
+    for (int c = 0; CATS[c]; c++) {
+      size_t k = strlen(CATS[c]);
+      if (strncmp(rest, CATS[c], k) || rest[k] != '_') continue;
+      const char *a = rest + k + 1, *us = strchr(a, '_');
+      if (!us) break;
+      char from[1200], to[1200];
+      snprintf(from, sizeof from, "%s/%s", cache_dir, de->d_name);
+      snprintf(to, sizeof to, "%s/pub/music/%s/%.*s/%s", cache_dir, CATS[c], (int)(us - a), a, us + 1);
+      mkdirs_for(to);
+      if (rename(from, to) == 0) fprintf(stderr, "cache: %s -> %s\n", de->d_name, to + strlen(cache_dir) + 1);
+      break;
+    }
+  }
+  closedir(d);
+}
+
+// Removes a downloaded song, and the folders it leaves empty.
+static void delete_download(const char *path) {
+  remove(path);
+  char p[1200]; snprintf(p, sizeof p, "%s", path);
+  for (char *slash; (slash = strrchr(p, '/')) && (size_t)(slash - p) > strlen(cache_dir); ) { *slash = 0; if (rmdir(p) != 0) break; }
 }
 
 static void start_playing(const char *path) {
@@ -149,7 +190,8 @@ static void play_from_listing(Source *s, int index) {
     if (i == index) start = pl_n;
     Item *it = &pl[pl_n++];
     it->remote = s->remote;
-    if (s->remote) snprintf(it->url, sizeof it->url, "%s%s", l->path, e->href);
+    if (s->cache) snprintf(it->url, sizeof it->url, "%s", e->href);
+    else if (s->remote) snprintf(it->url, sizeof it->url, "%s%s", l->path, e->href);
     else snprintf(it->url, sizeof it->url, "%s/%s", l->path, e->href);
     snprintf(it->name, sizeof it->name, "%s", e->name);
   }
@@ -164,11 +206,14 @@ static void job_poll(void) {
     s->loading = 0;
     if (job.depth == s->depth) { listing_free(&s->lv[s->depth].list); s->lv[s->depth].list = job.list; s->failed = !job.ok; }
     else listing_free(&job.list);
-    if (!job.ok && probing && job.src == 1 && job.depth == 0) { cur_src = 0; toast("No internet: showing the SD card"); }
+    if (!job.ok && probing && job.src == SRC_MUSIC && job.depth == 0) {   // offline: downloads first, else the card
+      cur_src = src[SRC_CACHE].lv[0].list.n ? SRC_CACHE : SRC_SD;
+      toast(cur_src == SRC_CACHE ? "No internet: showing your downloads" : "No internet: showing the SD card");
+    }
     else if (!job.ok) toast("Couldn't reach scene.org");
     probing = 0;
   } else if (k == JOB_GET) {
-    if (job.ok) { pl_i = job.play_index; start_playing(job.path); }
+    if (job.ok) { pl_i = job.play_index; start_playing(job.path); open_level(&src[SRC_CACHE]); }
     else toast("Download failed");
   }
 }
@@ -367,14 +412,19 @@ static void draw_browse(void) {
   snprintf(a, sizeof a, "< %s >", s->name);
   snprintf(b, sizeof b, "%d / %d", cur_src + 1, NSRC);
   top_bar(a, b);
-  if (s->remote) url_decode(l->path + strlen(SCENE), b, sizeof b);
+  if (s->cache) {
+    long total = 0; for (int i = 0; i < l->list.n; i++) total += l->list.e[i].size;
+    char sz[24]; size_str(total, sz, sizeof sz);
+    snprintf(b, sizeof b, "%d song%s · %s", l->list.n, l->list.n == 1 ? "" : "s", sz);
+  } else if (s->remote) url_decode(l->path + strlen(SCENE), b, sizeof b);
   else snprintf(b, sizeof b, "%s", l->path);
   fit(a, sizeof a, b, X1 - X0, 30, W_REG, 1);
   text(X0, 150, a, 30, W_REG, C_MUTE, A_LEFT);
   rule(X0, X1, 178, C_INK);
   if (s->loading) text(X0, 226, "Loading....", 34, W_LIGHT, C_MUTE, A_LEFT);
   else if (s->failed) text(X0, 226, s->remote ? "Couldn't reach scene.org. A to try again." : "This folder can't be read.", 30, W_REG, C_MUTE, A_LEFT);
-  else if (!l->list.n) text(X0, 226, s->remote ? "Nothing playable here." : "No songs yet. Put modules in /Music.", 30, W_REG, C_MUTE, A_LEFT);
+  else if (!l->list.n) text(X0, 226, s->cache ? "Nothing downloaded yet." : s->remote ? "Nothing playable here." : "No songs yet. Put modules in /Music.", 30, W_REG, C_MUTE, A_LEFT);
+  if (l->cursor >= l->list.n) l->cursor = l->list.n ? l->list.n - 1 : 0;
   if (l->cursor < l->top) l->top = l->cursor;
   if (l->cursor >= l->top + ROWS) l->top = l->cursor - ROWS + 1;
   for (int i = 0; i < ROWS && !s->loading; i++) {
@@ -382,7 +432,7 @@ static void draw_browse(void) {
     if (k >= l->list.n) break;
     Entry *e = &l->list.e[k];
     int sel = k == l->cursor;
-    char sz[24]; if (e->dir) snprintf(sz, sizeof sz, "%s", sel ? "->" : "/"); else size_str(e->size, sz, sizeof sz);
+    char sz[200]; if (e->dir) snprintf(sz, sizeof sz, "%s", sel ? "->" : "/"); else if (s->cache) fit(sz, sizeof sz, e->where, 360, 24, W_REG, 1); else size_str(e->size, sz, sizeof sz);
     int rw = text_w(sz, 24, W_REG) + 24;
     snprintf(b, sizeof b, "%s", e->name);
     fit(a, sizeof a, b, X1 - X0 - rw, 34, sel ? W_MED : W_LIGHT, 0);
@@ -443,8 +493,19 @@ static void on_button(int b) {
       case BTN_DOWN: if (n) l->cursor = (l->cursor + 1) % n; break;
       case BTN_L1: l->cursor = l->cursor - ROWS < 0 ? 0 : l->cursor - ROWS; break;
       case BTN_R1: if (n) l->cursor = l->cursor + ROWS >= n ? n - 1 : l->cursor + ROWS; break;
-      case BTN_LEFT: cur_src = (cur_src + NSRC - 1) % NSRC; if (!src[cur_src].lv[0].list.n && !src[cur_src].loading) open_level(&src[cur_src]); break;
-      case BTN_RIGHT: cur_src = (cur_src + 1) % NSRC; if (!src[cur_src].lv[0].list.n && !src[cur_src].loading) open_level(&src[cur_src]); break;
+      case BTN_LEFT: case BTN_RIGHT: {
+        cur_src = (cur_src + (b == BTN_LEFT ? NSRC - 1 : 1)) % NSRC;
+        Source *t = &src[cur_src];   // the card and downloads are read again each time; scene.org once
+        if (!t->remote ? t->depth == 0 : (!t->lv[0].list.n && !t->loading)) open_level(t);
+        break;
+      }
+      case BTN_X:
+        if (!s->cache || !n) break;
+        if (del_index == l->cursor && SDL_GetTicks() < del_until) {
+          delete_download(l->list.e[l->cursor].href);
+          open_level(s); del_index = -1; toast("Deleted");
+        } else { del_index = l->cursor; del_until = SDL_GetTicks() + 2500; toast("Press X again to delete this song"); }
+        break;
       case BTN_A:
         if (s->failed || (!n && !s->loading)) { open_level(s); break; }
         if (!n || s->loading) break;
@@ -484,6 +545,7 @@ static void shots(const char *dir, const char *module) {
   cur_src = 1; open_level(&src[1]);
   while (job_busy()) { SDL_Delay(50); job_poll(); }
   draw(); save_shot(dir, "browse");
+  migrate_cache(); cur_src = SRC_CACHE; open_level(&src[SRC_CACHE]); draw(); save_shot(dir, "downloads");
   pl = calloc(1, sizeof *pl); pl_n = 1; pl_i = 0; pl_src = 0;
   const char *slash = strrchr(module, '/');
   snprintf(pl[0].name, sizeof pl[0].name, "%s", slash ? slash + 1 : module);
@@ -515,6 +577,7 @@ int main(int argc, char **argv) {
   src[0].name = "SD card"; snprintf(src[0].root, sizeof src[0].root, "%s/Music", sd); src[0].remote = 0;
   src[1].name = "scene.org music"; snprintf(src[1].root, sizeof src[1].root, SCENE "/pub/music/"); src[1].remote = 1;
   src[2].name = "scene.org parties"; snprintf(src[2].root, sizeof src[2].root, SCENE "/pub/parties/"); src[2].remote = 1;
+  src[3].name = "Downloaded"; snprintf(src[3].root, sizeof src[3].root, "%s", cache_dir); src[3].cache = 1;
   for (int i = 0; i < NSRC; i++) snprintf(src[i].lv[0].path, sizeof src[i].lv[0].path, "%s", src[i].root);
   mkdir(src[0].root, 0755);
 
@@ -530,8 +593,9 @@ int main(int argc, char **argv) {
   if (shots_dir) { shots(shots_dir, argc > 5 ? argv[5] : ""); SDL_Quit(); return 0; }
 
   // Start on scene.org; the SD card is read too, and shown instead when there's no connection.
-  open_level(&src[0]);
-  cur_src = 1; probing = 1; open_level(&src[1]);
+  migrate_cache();
+  open_level(&src[SRC_SD]); open_level(&src[SRC_CACHE]);
+  cur_src = SRC_MUSIC; probing = 1; open_level(&src[SRC_MUSIC]);
 
   int held = -1; Uint32 repeat_at = 0;
   while (running) {
