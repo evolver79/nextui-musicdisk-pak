@@ -4,6 +4,7 @@
 set -e
 cd "$(dirname "$0")/.."
 XMP=libxmp-4.7.4
+mkdir -p deps; [ -f deps/$XMP.tar.gz ] || curl -sfL -o deps/$XMP.tar.gz https://github.com/libxmp/libxmp/releases/download/$XMP/$XMP.tar.gz
 docker build -q -t nextui-tracker-build build >/dev/null
 docker run --rm -v "$PWD:/w" -w /w nextui-tracker-build sh -c "
 set -e
