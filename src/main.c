@@ -39,6 +39,7 @@ static int pat_page, scope_sel;
 static int demo_part, demo_last_pos = -1;   // the demo effect; a new one every four song positions
 static float frame_dt = 1 / 60.f;
 static char toast_msg[128]; static Uint32 toast_until;
+static int show_help;   // the buttons, shown on first start and on SELECT in Browse
 
 static void toast(const char *m) { snprintf(toast_msg, sizeof toast_msg, "%s", m); toast_until = SDL_GetTicks() + 2600; }
 
@@ -669,11 +670,46 @@ static void draw_browse(void) {
     char t[16]; clock_str(ps.time, t);
     snprintf(b, sizeof b, "%s  %s", ps.paused ? "Paused" : "Playing", now_name);
     bottom_line(b, t);
-  } else bottom_line(NULL, NULL);
+  } else bottom_line(NULL, "SELECT  buttons");
+}
+
+// --- help: what the buttons do -------------------------------------------------------------------------------------
+static void help_column(int x, const char *head, const char *rows[][2], int n) {
+  text(x, 280, head, 22, W_MED, C_INK, A_LEFT);
+  rule(x, x + 440, 298, C_INK);
+  for (int i = 0; i < n; i++) {
+    int y = 344 + i * 52;
+    text(x, y, rows[i][0], 26, W_MED, C_INK, A_LEFT);
+    text(x + 120, y, rows[i][1], 26, W_REG, C_INK, A_LEFT);
+    rule(x, x + 440, y + 18, C_RULE);
+  }
+}
+
+static void draw_help(void) {
+  top_bar("Musicdisk", "Buttons");
+  text(X0, 156, "Demoscene music,", 64, W_LIGHT, C_INK, A_LEFT);
+  text(X0, 206, "straight from scene.org.", 30, W_REG, C_MUTE, A_LEFT);
+  static const char *browse[][2] = {
+    { "A", "Open, play" }, { "B", "Back" }, { "< >", "Switch source" }, { "L1 R1", "Jump by letter" },
+    { "Y", "Random song" }, { "X X", "Delete download" }, { "START", "To the player" } };
+  static const char *playing[][2] = {
+    { "A", "Pause" }, { "B", "Browse" }, { "SELECT", "Next screen" }, { "L1 R1", "Previous, next" },
+    { "< >", "Effect, channel" }, { "X Y", "Mute, solo" }, { "MENU", "Quit" } };
+  help_column(X0, "BROWSE", browse, 7);
+  help_column(528, "PLAYING", playing, 7);
+  text(X0, 732, "Press any button to start", 26, W_MED, C_INK, A_LEFT);
+  text(X1, 732, "SELECT in Browse: this again", 22, W_REG, C_MUTE, A_RIGHT);
+}
+
+static void help_seen(void) {
+  show_help = 0;
+  char p[800]; snprintf(p, sizeof p, "%s/help-seen", user_dir);
+  FILE *f = fopen(p, "w"); if (f) fclose(f);
 }
 
 static void draw(void) {
   gfx_clear();
+  if (show_help) { draw_help(); return; }
   const struct xmp_module *m = player_module();
   if (m) update_vu(m);
   if (screen == SCR_BROWSE) draw_browse();
@@ -716,6 +752,7 @@ static void letter_jump(Level *l, int dir) {
 }
 
 static void on_button(int b) {
+  if (show_help) { if (b == BTN_MENU) running = 0; help_seen(); return; }
   if (b == BTN_MENU) { running = 0; return; }
   if (screen == SCR_BROWSE) {
     Source *s = &src[cur_src];
@@ -761,6 +798,7 @@ static void on_button(int b) {
         break;
       case BTN_B: if (s->depth) leave_dir(s); else if (ps.loaded) screen = SCR_NOW; break;
       case BTN_START: if (ps.loaded) screen = SCR_NOW; break;
+      case BTN_SELECT: show_help = 1; break;
     }
     return;
   }
@@ -793,6 +831,7 @@ static void shots(const char *dir, const char *module) {
   cur_src = 1; open_level(&src[1]);
   while (job_busy()) { SDL_Delay(50); job_poll(); }
   draw(); save_shot(dir, "browse");
+  show_help = 1; draw(); save_shot(dir, "help"); show_help = 0;
   migrate_cache(); cur_src = SRC_CACHE; open_level(&src[SRC_CACHE]); draw(); save_shot(dir, "downloads");
   // a compo folder, with the titles from its .diz files
   cur_src = 2; snprintf(src[2].lv[0].path, sizeof src[2].lv[0].path, SCENE "/pub/parties/1995/assembly95/m4ch/");
@@ -867,6 +906,7 @@ int main(int argc, char **argv) {
   cur_src = SRC_MUSIC; probing = 1; open_level(&src[SRC_MUSIC]);
 
   srand((unsigned)time(NULL));
+  { char p[800]; struct stat st; snprintf(p, sizeof p, "%s/help-seen", user_dir); show_help = stat(p, &st) != 0; }
   int held = -1; Uint32 repeat_at = 0;
   while (running) {
     SDL_Event e;
