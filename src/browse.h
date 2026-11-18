@@ -2,8 +2,15 @@
 #pragma once
 #include <stddef.h>
 
-typedef struct { char name[192]; char href[384]; int dir; long size; long mtime; char where[160]; } Entry;
-typedef struct { Entry *e; int n, cap; } Listing;
+typedef struct {
+  char name[192]; char href[384]; int dir; long size; long mtime; char where[160];
+  char title[96], artist[64];   // from the song's .diz, when it has one
+  char diz[192];                // the .diz beside it on the server ("" when none)
+  int diz_state;                // 0 not read yet, 1 fetching, 2 read, 3 none to be had
+  int rank;                     // its place in the compo, from results.txt (0: unknown)
+  int music;                    // a folder that holds music (at parties)
+} Entry;
+typedef struct { Entry *e; int n, cap; int has_results; } Listing;
 
 void listing_free(Listing *l);
 int  list_local(const char *dir, Listing *l);      // 0 on success

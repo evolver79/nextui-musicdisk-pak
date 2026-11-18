@@ -1,5 +1,6 @@
 #include "browse.h"
 #include "http.h"
+#include "text.h"
 #include <ctype.h>
 #include <dirent.h>
 #include <stdio.h>
@@ -43,6 +44,7 @@ static Entry *add(Listing *l) {
 static int by_kind_then_name(const void *a, const void *b) {
   const Entry *x = a, *y = b;
   if (x->dir != y->dir) return y->dir - x->dir;
+  if (x->music != y->music) return y->music - x->music;   // at parties, the music folders first
   return strcasecmp(x->name, y->name);
 }
 
@@ -85,6 +87,8 @@ int list_remote(const char *url, Listing *l) {
   char *b; size_t n;
   int st = http_get(url, &b, &n, NULL, NULL);
   if (st != 200) { free(b); return st ? st : -1; }
+  int parties = strstr(url, "/pub/parties/") != NULL;
+  char **all = NULL; int nall = 0, call = 0;   // every name in the folder, to find .diz files and results.txt
   for (const char *pre = "<td class=\"n\"><a href=\"", *p = b; (p = strstr(p, pre)); ) {
     p += strlen(pre);
     char *q = strchr(p, '"'); if (!q) break;
@@ -95,12 +99,15 @@ int list_remote(const char *url, Listing *l) {
     unescape_html(name);
     p = end;
     if (!strcmp(href, "../")) continue;
+    if (nall == call) { call = call ? call * 2 : 256; all = realloc(all, call * sizeof *all); }
+    all[nall++] = strdup(href);
     int dir = href[strlen(href) - 1] == '/';
     if (!dir && !playable_name(name)) continue;
     Entry *e = add(l);
     snprintf(e->name, sizeof e->name, "%s", name);
     snprintf(e->href, sizeof e->href, "%s", href);
     e->dir = dir; e->size = -1;
+    if (dir && parties) e->music = music_dir_name(name);
     char *s = strstr(p, "<td class=\"s\">");
     char *next = strstr(p, "<td class=\"n\">");
     if (s && (!next || s < next) && !dir) {
@@ -109,6 +116,17 @@ int list_remote(const char *url, Listing *l) {
     }
   }
   free(b);
+  for (int i = 0; i < nall; i++) if (!strcasecmp(all[i], "results.txt")) l->has_results = 1;
+  for (int i = 0; i < l->n; i++) {
+    Entry *e = &l->e[i];
+    if (e->dir) continue;
+    const char *dot = strrchr(e->href, '.'); size_t stem = dot ? (size_t)(dot - e->href) : strlen(e->href);
+    for (int k = 0; k < nall; k++)
+      if (strlen(all[k]) == stem + 4 && !strncasecmp(all[k], e->href, stem) && !strcasecmp(all[k] + stem, ".diz")) { snprintf(e->diz, sizeof e->diz, "%s", all[k]); break; }
+    if (!e->diz[0]) e->diz_state = 3;
+  }
+  for (int i = 0; i < nall; i++) free(all[i]);
+  free(all);
   qsort(l->e, l->n, sizeof *l->e, by_kind_then_name);
   return 0;
 }
@@ -134,6 +152,7 @@ static void walk(const char *root, const char *rel, Listing *l, int depth) {
     struct stat st;
     if (stat(full, &st) != 0) continue;
     if (S_ISDIR(st.st_mode)) {
+      if (!rel[0] && !strcmp(de->d_name, "unzipped")) continue;   // songs unpacked from musicdisk zips
       if (depth < 12) { char r2[700]; if (rel[0]) snprintf(r2, sizeof r2, "%s/%s", rel, de->d_name); else snprintf(r2, sizeof r2, "%s", de->d_name); walk(root, r2, l, depth + 1); }
       continue;
     }
@@ -142,6 +161,10 @@ static void walk(const char *root, const char *rel, Listing *l, int depth) {
     url_decode(de->d_name, e->name, sizeof e->name);
     snprintf(e->href, sizeof e->href, "%s", full);
     e->size = st.st_size; e->mtime = st.st_mtime;
+    char diz[1500]; snprintf(diz, sizeof diz, "%s", full);   // its .diz, if it was fetched while browsing
+    char *dot = strrchr(diz, '.'), *slash = strrchr(diz, '/');
+    if (dot && dot > slash) { strcpy(dot, ".diz"); char *t = read_text_file(diz, 16384); if (t) { diz_parse(t, e->title, sizeof e->title, e->artist, sizeof e->artist); free(t); } }
+    e->diz_state = 2;
     if (!rel[0]) snprintf(e->where, sizeof e->where, "earlier download");
     else { char w[700]; url_decode(!strncmp(rel, "pub/", 4) ? rel + 4 : rel, w, sizeof w); snprintf(e->where, sizeof e->where, "%s", w); }
   }
