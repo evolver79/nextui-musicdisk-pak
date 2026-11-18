@@ -1,0 +1,6 @@
+deps/*.tar.gz
+build/out/
+dist/
+test/
+Tracker.pak/tracker
+.DS_Store

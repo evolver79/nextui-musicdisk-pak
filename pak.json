@@ -1,0 +1,15 @@
+{
+  "name": "Tracker",
+  "version": "v0.1.0",
+  "type": "TOOL",
+  "description": "MOD, S3M, XM and IT player in a quiet line look: plays from the SD card and straight from scene.org, with the pattern, real per-channel scopes and VU.",
+  "author": "evolver79",
+  "repo_url": "https://github.com/evolver79/nextui-tracker-pak",
+  "release_filename": "Tracker.pak.zip",
+  "changelog": {
+    "v0.1.0": "First version: SD card and scene.org browsing, now playing, pattern and scopes screens."
+  },
+  "platforms": [
+    "tg5040"
+  ]
+}
