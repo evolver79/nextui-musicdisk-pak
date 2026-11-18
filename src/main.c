@@ -500,7 +500,7 @@ static void shots(const char *dir, const char *module) {
   for (int part = 0; part < DEMO_PARTS; part++) {
     demo_part = part;
     for (int f = 0; f < 90; f++) { player_pump(1); player_get(&ps); update_vu(player_module()); gfx_clear(); demo_draw(player_module(), &ps, vu, 1 / 50.f, part); }
-    draw(); char n[32]; snprintf(n, sizeof n, "demo-%d", part); save_shot(dir, n);
+    demo_last_pos = ps.pos; draw(); char n[32]; snprintf(n, sizeof n, "demo-%d", part); save_shot(dir, n);
   }
 }
 
