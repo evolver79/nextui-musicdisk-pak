@@ -7,5 +7,5 @@ build/build.sh
 cp build/out/musicdisk Musicdisk.pak/musicdisk
 mkdir -p dist
 rm -f dist/Musicdisk.pak.zip
-(cd Musicdisk.pak && zip -q -X ../dist/Musicdisk.pak.zip musicdisk launch.sh GeistMono-Regular.ttf GeistMono-Medium.ttf GeistMono-Bold.ttf LICENSE-GeistMono.txt LICENSE-libxmp.txt)
+(cd Musicdisk.pak && zip -q -X ../dist/Musicdisk.pak.zip musicdisk launch.sh DepartureMono-Regular.otf LICENSE-DepartureMono.txt LICENSE-libxmp.txt)
 unzip -l dist/Musicdisk.pak.zip

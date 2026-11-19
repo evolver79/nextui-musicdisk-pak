@@ -14,6 +14,6 @@ build/build.sh
 cp build/out/musicdisk Musicdisk.pak/musicdisk
 ssh $OPTS root@$IP "mkdir -p '$DIR' /mnt/SDCARD/Music; rm -f '$DIR/musicdisk'"
 # the Brick has no scp: the files go over as a tar stream
-COPYFILE_DISABLE=1 tar -C Musicdisk.pak -cf - musicdisk launch.sh GeistMono-Regular.ttf GeistMono-Medium.ttf GeistMono-Bold.ttf | ssh $OPTS root@$IP "tar -xf - -C '$DIR'"
+COPYFILE_DISABLE=1 tar -C Musicdisk.pak -cf - musicdisk launch.sh DepartureMono-Regular.otf | ssh $OPTS root@$IP "tar -xf - -C '$DIR'"
 ssh $OPTS root@$IP "chmod +x '$DIR/musicdisk' '$DIR/launch.sh'; ls -la '$DIR'"
 echo "Done. Open Tools > Musicdisk on the Brick."

@@ -151,8 +151,8 @@ static void build_scroll(const struct xmp_module *m) {
 // A plain ticker between two rules, like a news line: the title, then the sample names.
 static void scroller(const struct xmp_module *m, float dt, int paused) {
   if (m != scroll_for) build_scroll(m);
-  rule(0, 1024, 666, C_RULE);
-  rule(0, 1024, 742, C_RULE);
+  double_dash(0, 1024, 660, C_RULE);
+  double_dash(0, 1024, 742, C_RULE);
   int adv = text_w("M", 34, W_REG);
   int len = (int)strlen(scroll);
   if (!paused) scroll_x -= dt * 110;

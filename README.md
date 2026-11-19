@@ -43,4 +43,4 @@ Unzip `Musicdisk.pak.zip` into a new folder on the SD card, `Tools/tg5040/Musicd
 `./package.sh` builds `dist/Musicdisk.pak.zip` in an ARM64 Debian bullseye container (Docker). `build/build.sh --shots
 <module>` also draws every screen to `build/out/shots/`. `./deploy.sh [ip]` copies a build to a Brick with SSH on.
 
-Font: Geist Mono (SIL OFL). libxmp: MIT.
+Font: Departure Mono (SIL OFL). libxmp: MIT.

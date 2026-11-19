@@ -489,16 +489,29 @@ static void ext_upper(const char *name, char *out, size_t n) {
   for (char *p = out; *p; p++) if (*p >= 'a' && *p <= 'z') *p -= 32;
 }
 
-static void top_bar(const char *left, const char *right) {
-  text(X0, 64, left, 24, W_REG, C_MUTE, A_LEFT);
-  text(X1, 64, right, 24, W_REG, C_MUTE, A_RIGHT);
+static void top_bar(const char *left, const char *right) { heading(X0, 62, X1, left, right, 22, C_INK); }
+
+// A filled bar in a box: green up to p, dithered after.
+static void meter(int x, int y, int w, int h, float p) {
+  p = p < 0 ? 0 : p > 1 ? 1 : p;
+  int f = (int)((w - 4) * p);
+  fill_rect(x + 2, y + 2, f, h - 4, C_ACC);
+  dither(x + 2 + f, y + 2, w - 4 - f, h - 4, C_RULE);
+  frame(x, y, w, h, C_INK);
 }
 
 static void bottom_line(const char *left, const char *right) {
   char b[160];
-  if (SDL_GetTicks() < toast_until) { fit(b, sizeof b, toast_msg, X1 - X0, 26, W_MED, 0); text(X0, 732, b, 26, W_MED, C_INK, A_LEFT); return; }
-  if (left) { fit(b, sizeof b, left, 700, 26, W_REG, 0); text(X0, 732, b, 26, W_REG, C_INK, A_LEFT); }
-  if (right) text(X1, 732, right, 24, W_REG, C_MUTE, A_RIGHT);
+  double_dash(X0, X1, 690, C_RULE);
+  if (SDL_GetTicks() < toast_until) {
+    char t[170]; snprintf(t, sizeof t, "!! %s", toast_msg);
+    fit(b, sizeof b, t, X1 - X0 - 40, 22, W_REG, 0);
+    panel(X0, 704, text_w(b, 22, W_REG) + 28, 42, C_ACC);
+    text(X0 + 14, 733, b, 22, W_REG, C_INK, A_LEFT);
+    return;
+  }
+  if (left) { fit(b, sizeof b, left, 680, 22, W_REG, 0); text(X0, 734, b, 22, W_REG, C_INK, A_LEFT); }
+  if (right) text(X1, 734, right, 22, W_REG, C_MUTE, A_RIGHT);
 }
 
 // The song's name: from its .diz, else the name inside the module, else the file name.
@@ -510,8 +523,8 @@ static void song_title(const struct xmp_module *m, char *out, size_t n) {
 
 static void draw_nothing(void) {
   top_bar("Musicdisk", "");
-  text(X0, 172, "Nothing playing", 64, W_LIGHT, C_INK, A_LEFT);
-  text(X0, 230, "Press START to pick a song.", 30, W_REG, C_MUTE, A_LEFT);
+  text(X0, 172, "NOTHING PLAYING", 66, W_MED, C_INK, A_LEFT);
+  text(X0, 226, "Press START to pick a song.", 33, W_REG, C_MUTE, A_LEFT);
   bottom_line(NULL, NULL);
 }
 
@@ -523,25 +536,31 @@ static void draw_now(const struct xmp_module *m) {
   top_bar(a, where);
   char title[100]; song_title(m, title, sizeof title);
   fit(a, sizeof a, title, X1 - X0, 80, W_REG, 0);
-  text(X0, 172, a, 80, W_REG, C_INK, A_LEFT);
+  text(X0, 172, a, 77, W_MED, C_INK, A_LEFT);
   if (now_artist[0]) snprintf(b, sizeof b, "%s · %s", now_artist, now_name);
   else snprintf(b, sizeof b, "%s · %s", now_name, m->type);
   fit(a, sizeof a, b, X1 - X0, 30, W_REG, 0);
   text(X0, 222, a, 30, W_REG, C_MUTE, A_LEFT);
   clock_str(ps.time, a); text(X0, 340, a, 88, W_LIGHT, ps.paused ? C_MUTE : C_INK, A_LEFT);
   clock_str(ps.total, a); text(X1, 340, a, 30, W_REG, C_MUTE, A_RIGHT);
-  rule(X0, X1, 372, C_RULE);
-  float p = ps.total > 0 ? (float)ps.time / ps.total : 0; if (p > 1) p = 1;
-  fill_rect(X0, 370, (int)((X1 - X0) * p), 6, C_INK);
-  // one line per channel
-  int n = ps.nch, yb = 600, gap = n > 1 ? (X1 - X0 - 6) / (n - 1) : 0;
-  if (n > 16 && gap < 14) gap = 14;
+  meter(X0, 362, X1 - X0, 22, ps.total > 0 ? (float)ps.time / ps.total : 0);
+  // one LED meter per channel: green blocks in ink, a dithered ghost above them
+  int n = ps.nch, yb = 622, seg = 14, nseg = 11;
+  int bw = n > 16 ? 14 : 48;
+  int gap = n > 1 ? (X1 - X0 - bw) / (n - 1) : 0;
+  if (n > 1 && gap - 6 < bw) bw = gap - 6 > 4 ? gap - 6 : 4;
   for (int c = 0; c < n; c++) {
-    int x = X0 + c * gap; if (x > X1) break;
-    int h = 8 + (int)(vu[c] * 150 * 1.6f); if (h > 158) h = 158;
-    SDL_Color col = player_muted(c) ? C_RULE : C_INK;
-    fill_rect(x, yb - h, n > 16 ? 4 : 6, h, col);
-    if (n <= 16) { snprintf(a, sizeof a, "%d", c + 1); text(x, yb + 40, a, 22, W_REG, player_muted(c) ? C_RULE : C_MUTE, A_LEFT); }
+    int x = X0 + c * gap; if (x + bw > X1) break;
+    int lit = (int)(vu[c] * nseg * 1.6f + .5f); if (lit > nseg) lit = nseg;
+    int mu = player_muted(c);
+    dither(x, yb - nseg * seg + 2, bw, (nseg - lit) * seg - 2, C_RULE);
+    for (int k = 0; k < lit; k++) {
+      int y = yb - (k + 1) * seg + 2;
+      if (mu) { dither(x, y, bw, seg - 4, C_MUTE); continue; }
+      fill_rect(x, y, bw, seg - 4, k == nseg - 1 ? C_INK : C_ACC);
+      frame(x, y, bw, seg - 4, C_INK);
+    }
+    if (n <= 16) { snprintf(a, sizeof a, "%d", c + 1); text(x, yb + 32, a, 22, W_REG, mu ? C_RULE : C_MUTE, A_LEFT); }
   }
   if (pl_i + 1 < pl_n) { snprintf(a, sizeof a, "Next  %s", pl[pl_i + 1].name); bottom_line(a, NULL); }
   else bottom_line(NULL, NULL);
@@ -555,18 +574,21 @@ static void draw_pattern(const struct xmp_module *m) {
   int pages = (ps.nch + 3) / 4; if (pat_page >= pages) pat_page = pages - 1;
   int base = pat_page * 4;
   static const int xs[5] = { X0, 176, 374, 572, 770 };
-  text(xs[0], 132, "ROW", 22, W_MED, C_INK, A_LEFT);
+  fill_rect(X0, 100, X1 - X0, 48, C_SURF);
+  dither(X0 + (X1 - X0) / 2, 100, (X1 - X0) / 2, 48, C_RULE);
+  frame(X0, 100, X1 - X0, 50, C_INK);
+  text(xs[0] + 12, 132, "ROW", 22, W_REG, C_INK, A_LEFT);
   for (int i = 0; i < 4 && base + i < ps.nch; i++) {
     char l[48]; chan_label(m, base + i, l, sizeof l);
     fit(a, sizeof a, l, 176, 22, W_MED, 0);
-    text(xs[i + 1], 132, a, 22, W_MED, player_muted(base + i) ? C_MUTE : C_INK, A_LEFT);
+    text(xs[i + 1], 132, a, 22, W_REG, player_muted(base + i) ? C_MUTE : C_INK, A_LEFT);
   }
-  rule(X0, X1, 150, C_INK);
   for (int k = -4; k <= 4; k++) {
     int r = ps.row + k, y = 214 + (k + 4) * 60, cur = k == 0;
+    if (cur) panel(X0, y - 58, X1 - X0, 58, C_ACC);
     if (r >= 0 && r < ps.num_rows) {
       snprintf(a, sizeof a, "%02d", r);
-      text(xs[0], y - 18, a, 34, cur ? W_MED : W_LIGHT, cur || r % 4 == 0 ? C_INK : C_MUTE, A_LEFT);
+      text(xs[0] + 12, y - 18, a, 34, cur ? W_MED : W_LIGHT, cur || r % 4 == 0 ? C_INK : C_MUTE, A_LEFT);
       for (int i = 0; i < 4 && base + i < ps.nch; i++) {
         struct xmp_event ev;
         if (!event_at(m, ps.pattern, r, base + i, &ev)) continue;
@@ -577,7 +599,7 @@ static void draw_pattern(const struct xmp_module *m) {
         text(xs[i + 1], y - 18, a, 34, cur ? W_MED : W_LIGHT, lit ? C_INK : C_MUTE, A_LEFT);
       }
     }
-    rule(X0, X1, y, cur || k == -1 ? C_INK : C_RULE);
+    if (!cur && k != -1 && k < 4) dotted(X0, X1, y, C_RULE);
   }
   if (pages > 1) { snprintf(a, sizeof a, "< %d-%d of %d >", base + 1, base + 4 < ps.nch ? base + 4 : ps.nch, ps.nch); }
   else snprintf(a, sizeof a, "%d channels", ps.nch);
@@ -593,21 +615,20 @@ static void draw_scopes(const struct xmp_module *m) {
   int page = scope_sel / 8, base = page * 8;
   SDL_Point pts[240];
   for (int k = 0; k < 8 && base + k < ps.nch; k++) {
-    int c = base + k, gx = k % 2, gy = k / 2, x = X0 + gx * 472, y = 104 + gy * 152, w = 440;
+    int c = base + k, gx = k % 2, gy = k / 2, x = X0 + gx * 472, y = 92 + gy * 148, w = 440, h = 134;
     int mu = player_muted(c), sel = c == scope_sel;
     char l[48]; chan_label(m, c, l, sizeof l);
-    fit(a, sizeof a, l, mu ? 300 : 420, 22, W_MED, 0);
-    text(x, y + 30, a, 22, sel ? W_MED : W_REG, mu ? C_RULE : C_INK, A_LEFT);
-    if (mu) text(x + w, y + 30, "MUTED", 22, W_REG, C_MUTE, A_RIGHT);
-    if (sel) fill_rect(x, y + 38, text_w(a, 22, W_MED), 2, C_INK);
-    int cy = y + 92, np = 0;
-    for (int i = 0; i <= w && np < 240; i += 2) { float v = chan_value(m, c, i); pts[np].x = x + i; { float a2 = v * 96; if (a2 > 56) a2 = 56; if (a2 < -56) a2 = -56; pts[np].y = cy - (int)a2; } np++; }
+    fit(a, sizeof a, l, mu ? 290 : 400, 22, W_REG, 0);
+    int top = window(x, y, w, h, a, sel);
+    if (mu) text(x + w - 14, y + 30, "MUTED", 22, W_REG, C_MUTE, A_RIGHT);
+    int cy = top + (y + h - top) / 2, np = 0;
+    dotted(x + 10, x + w - 10, cy, C_RULE);
+    for (int i = 0; i <= w - 24 && np < 240; i += 2) { float v = chan_value(m, c, i); pts[np].x = x + 12 + i; { float a2 = v * 80; if (a2 > 40) a2 = 40; if (a2 < -40) a2 = -40; pts[np].y = cy - (int)a2; } np++; }
     SDL_Color col = mu ? C_RULE : C_INK;
     SDL_SetRenderDrawColor(R, col.r, col.g, col.b, 255);
     SDL_RenderDrawLines(R, pts, np);
     for (int i = 0; i < np; i++) pts[i].y++;
     SDL_RenderDrawLines(R, pts, np);
-    if (gy < 3) rule(x, x + w, y + 150, C_RULE);
   }
   if (ps.nch > 8) { snprintf(a, sizeof a, "Channels %d-%d of %d", base + 1, base + 8 < ps.nch ? base + 8 : ps.nch, ps.nch); bottom_line(a, "X mute  Y solo"); }
   else bottom_line(NULL, "X mute  Y solo");
@@ -617,18 +638,19 @@ static void draw_browse(void) {
   Source *s = &src[cur_src];
   Level *l = &s->lv[s->depth];
   char a[400], b[400];
-  snprintf(a, sizeof a, "< %s >", s->name);
-  snprintf(b, sizeof b, "%d / %d", cur_src + 1, NSRC);
-  top_bar(a, b);
+  static const char *tabs[NSRC] = { "SD", "SCENE.ORG", "PARTIES", "DOWNLOADED" };
+  for (int i = 0, x = X0; i < NSRC; i++) x += tab(x, 30, tabs[i], i == cur_src) + 12;
   if (s->cache) {
     long total = 0; for (int i = 0; i < l->list.n; i++) total += l->list.e[i].size;
     char sz[24]; size_str(total, sz, sizeof sz);
     snprintf(b, sizeof b, "%d song%s · %s", l->list.n, l->list.n == 1 ? "" : "s", sz);
   } else if (s->remote) url_decode(l->path + strlen(SCENE), b, sizeof b);
   else snprintf(b, sizeof b, "%s", l->path);
-  fit(a, sizeof a, b, X1 - X0, 30, W_REG, 1);
-  text(X0, 150, a, 30, W_REG, C_MUTE, A_LEFT);
-  rule(X0, X1, 178, C_INK);
+  char cnt[32] = "";
+  if (!s->loading && !s->failed && l->list.n && !s->cache) snprintf(cnt, sizeof cnt, "%d", l->list.n);
+  fit(a, sizeof a, b, X1 - X0 - 120, 22, W_REG, 1);
+  heading(X0, 130, X1, a, cnt, 22, C_MUTE);
+  double_dash(X0, X1, 162, C_INK);
   if (s->loading) text(X0, 226, "Loading....", 34, W_LIGHT, C_MUTE, A_LEFT);
   else if (s->failed) text(X0, 226, s->remote ? "Couldn't reach scene.org. A to try again." : "This folder can't be read.", 30, W_REG, C_MUTE, A_LEFT);
   else if (!l->list.n) text(X0, 226, s->cache ? "Nothing downloaded yet." : s->remote ? "Nothing playable here." : "No songs yet. Put modules in /Music.", 30, W_REG, C_MUTE, A_LEFT);
@@ -649,23 +671,25 @@ static void draw_browse(void) {
     else size_str(e->size, sz, sizeof sz);
     int rw = text_w(sz, 24, W_REG) + 24;
     snprintf(b, sizeof b, "%s", e->title[0] ? e->title : e->name);
-    fit(a, sizeof a, b, X1 - X0 - rw, 34, sel ? W_MED : W_LIGHT, 0);
+    fit(a, sizeof a, b, X1 - X0 - rw - 28, 33, W_REG, 0);
     int quiet = e->dir && music_dirs && !e->music;   // at a party: the folders without music step back
-    text(X0, y - 20, a, 34, sel ? W_MED : W_LIGHT, quiet && !sel ? C_MUTE : C_INK, A_LEFT);
-    text(X1, y - 20, sz, 24, W_REG, sel ? C_INK : C_MUTE, A_RIGHT);
-    rule(X0, X1, y, sel || k == l->cursor - 1 ? C_INK : C_RULE);
+    if (sel) panel(X0, y - 60, X1 - X0, 56, C_ACC);
+    text(X0 + 14, y - 20, a, 33, W_REG, quiet && !sel ? C_MUTE : C_INK, A_LEFT);
+    text(X1 - 14, y - 22, sz, 22, W_REG, sel ? C_INK : C_MUTE, A_RIGHT);
+    if (!sel && k != l->cursor - 1 && i < ROWS - 1) dotted(X0, X1, y, C_RULE);
   }
   // the bottom line: a download, or what's playing
   if (job.kind == JOB_RANDOM && !job.picked) bottom_line("Finding a random song....", NULL);
   else if (job.kind == JOB_GET || job.kind == JOB_RANDOM) {
     const char *slash = strrchr(job.url, '/');
     url_decode(slash ? slash + 1 : job.url, b, sizeof b);
-    fit(a, sizeof a, b, 560, 26, W_MED, 0);
-    text(X0, 732, a, 26, W_MED, C_INK, A_LEFT);
+    double_dash(X0, X1, 690, C_RULE);
+    fit(a, sizeof a, b, 400, 22, W_REG, 0);
+    text(X0, 734, a, 22, W_REG, C_INK, A_LEFT);
     float p = job.total > 0 ? (float)job.got / job.total : 0;
     if (job.total > 0) snprintf(a, sizeof a, "%d%%", (int)(p * 100)); else size_str(job.got, a, sizeof a);
-    text(X1, 732, a, 26, W_REG, C_MUTE, A_RIGHT);
-    fill_rect(X0, 748, X1 - X0, 2, C_RULE); fill_rect(X0, 747, (int)((X1 - X0) * p), 4, C_INK);
+    text(X1, 734, a, 22, W_REG, C_MUTE, A_RIGHT);
+    meter(X0 + 430, 714, X1 - X0 - 430 - 90, 24, p);
   } else if (ps.loaded) {
     char t[16]; clock_str(ps.time, t);
     snprintf(b, sizeof b, "%s  %s", ps.paused ? "Paused" : "Playing", now_name);
@@ -675,20 +699,19 @@ static void draw_browse(void) {
 
 // --- help: what the buttons do -------------------------------------------------------------------------------------
 static void help_column(int x, const char *head, const char *rows[][2], int n) {
-  text(x, 280, head, 22, W_MED, C_INK, A_LEFT);
-  rule(x, x + 440, 298, C_INK);
+  int top = window(x, 236, 440, 432, head, 0);
   for (int i = 0; i < n; i++) {
-    int y = 344 + i * 52;
-    text(x, y, rows[i][0], 26, W_MED, C_INK, A_LEFT);
-    text(x + 120, y, rows[i][1], 26, W_REG, C_INK, A_LEFT);
-    rule(x, x + 440, y + 18, C_RULE);
+    int y = top + 44 + i * 54;
+    text(x + 16, y, rows[i][0], 22, W_MED, C_INK, A_LEFT);
+    text(x + 140, y, rows[i][1], 22, W_REG, C_INK, A_LEFT);
+    if (i < n - 1) dotted(x + 16, x + 424, y + 20, C_RULE);
   }
 }
 
 static void draw_help(void) {
   top_bar("Musicdisk", "Buttons");
-  text(X0, 156, "Demoscene music,", 64, W_LIGHT, C_INK, A_LEFT);
-  text(X0, 206, "straight from scene.org.", 30, W_REG, C_MUTE, A_LEFT);
+  text(X0, 150, "DEMOSCENE MUSIC", 66, W_MED, C_INK, A_LEFT);
+  text(X0, 198, "straight from scene.org.", 33, W_REG, C_MUTE, A_LEFT);
   static const char *browse[][2] = {
     { "A", "Open, play" }, { "B", "Back" }, { "< >", "Switch source" }, { "L1 R1", "Jump by letter" },
     { "Y", "Random song" }, { "X X", "Delete download" }, { "START", "To the player" } };
@@ -697,8 +720,9 @@ static void draw_help(void) {
     { "< >", "Effect, channel" }, { "X Y", "Mute, solo" }, { "MENU", "Quit" } };
   help_column(X0, "BROWSE", browse, 7);
   help_column(528, "PLAYING", playing, 7);
-  text(X0, 732, "Press any button to start", 26, W_MED, C_INK, A_LEFT);
-  text(X1, 732, "SELECT in Browse: this again", 22, W_REG, C_MUTE, A_RIGHT);
+  double_dash(X0, X1, 690, C_RULE);
+  text(X0, 734, "[ Press any button ]", 22, W_REG, C_INK, A_LEFT);
+  text(X1, 734, "SELECT in Browse: this again", 22, W_REG, C_MUTE, A_RIGHT);
 }
 
 static void help_seen(void) {
