@@ -5,7 +5,8 @@ set -e
 cd "$(dirname "$0")"
 build/build.sh
 cp build/out/musicdisk Musicdisk.pak/musicdisk
+rm -rf Musicdisk.pak/fonts && cp -r ui/dot/fonts Musicdisk.pak/fonts
 mkdir -p dist
 rm -f dist/Musicdisk.pak.zip
-(cd Musicdisk.pak && zip -q -X ../dist/Musicdisk.pak.zip musicdisk launch.sh DepartureMono-Regular.otf LICENSE-DepartureMono.txt LICENSE-libxmp.txt)
+(cd Musicdisk.pak && zip -q -X -r ../dist/Musicdisk.pak.zip musicdisk launch.sh fonts LICENSE-libxmp.txt)
 unzip -l dist/Musicdisk.pak.zip

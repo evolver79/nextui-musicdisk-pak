@@ -1,5 +1,5 @@
 // Musicdisk: a MOD / S3M / XM / IT player for NextUI. Plays from the SD card and from scene.org's mirror,
-// in a quiet line look: now playing, the pattern, real scopes, and a file browser.
+// drawn with the shared Dot UI (ui/dot): now playing, demo effects, the pattern, real scopes, and a file browser.
 #include <SDL2/SDL.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -27,9 +27,7 @@ enum { BTN_A = SDL_CONTROLLER_BUTTON_B, BTN_B = SDL_CONTROLLER_BUTTON_A, BTN_X =
 
 enum { SCR_NOW, SCR_DEMO, SCR_PATTERN, SCR_SCOPES, SCR_BROWSE };
 #define SCENE "https://ftp.scene.org"
-#define X0 56
-#define X1 968
-#define ROWS 7
+#define ROWS 5
 
 static int screen = SCR_BROWSE, running = 1;
 static char user_dir[700], cache_dir[760];
@@ -480,38 +478,13 @@ static void update_vu(const struct xmp_module *m) {
   }
 }
 
-// --- drawing --------------------------------------------------------------------------------------------------------
+// --- drawing (Dot: ui/dot) ---------------------------------------------------------------------------------------
 static void clock_str(int ms, char *out) { int s = ms / 1000; sprintf(out, "%02d:%02d", s / 60, s % 60); }
 
 static void ext_upper(const char *name, char *out, size_t n) {
   const char *dot = strrchr(name, '.');
   snprintf(out, n, "%s", dot ? dot + 1 : "MOD");
   for (char *p = out; *p; p++) if (*p >= 'a' && *p <= 'z') *p -= 32;
-}
-
-static void top_bar(const char *left, const char *right) { heading(X0, 62, X1, left, right, 22, C_INK); }
-
-// A filled bar in a box: green up to p, dithered after.
-static void meter(int x, int y, int w, int h, float p) {
-  p = p < 0 ? 0 : p > 1 ? 1 : p;
-  int f = (int)((w - 4) * p);
-  fill_rect(x + 2, y + 2, f, h - 4, C_ACC);
-  dither(x + 2 + f, y + 2, w - 4 - f, h - 4, C_RULE);
-  frame(x, y, w, h, C_INK);
-}
-
-static void bottom_line(const char *left, const char *right) {
-  char b[160];
-  double_dash(X0, X1, 690, C_RULE);
-  if (SDL_GetTicks() < toast_until) {
-    char t[170]; snprintf(t, sizeof t, "!! %s", toast_msg);
-    fit(b, sizeof b, t, X1 - X0 - 40, 22, W_REG, 0);
-    panel(X0, 704, text_w(b, 22, W_REG) + 28, 42, C_ACC);
-    text(X0 + 14, 733, b, 22, W_REG, C_INK, A_LEFT);
-    return;
-  }
-  if (left) { fit(b, sizeof b, left, 680, 22, W_REG, 0); text(X0, 734, b, 22, W_REG, C_INK, A_LEFT); }
-  if (right) text(X1, 734, right, 22, W_REG, C_MUTE, A_RIGHT);
 }
 
 // The song's name: from its .diz, else the name inside the module, else the file name.
@@ -521,208 +494,253 @@ static void song_title(const struct xmp_module *m, char *out, size_t n) {
   snprintf(out, n, "%s", t[0] ? t : now_name);
 }
 
+static void dock4(const char *k1, const char *t1, const char *k2, const char *t2, const char *k3, const char *t3,
+                  const char *k4, const char *t4) {   // NULL keys are left out
+  DotHint h[4]; int n = 0;
+  if (k1) h[n++] = (DotHint){ k1, t1 };
+  if (k2) h[n++] = (DotHint){ k2, t2 };
+  if (k3) h[n++] = (DotHint){ k3, t3 };
+  if (k4) h[n++] = (DotHint){ k4, t4 };
+  dot_dock(D, h, n);
+}
+
+static void player_dock(const char *k3, const char *t3) {
+  dock4("A", ps.paused ? "Play" : "Pause", k3, t3, "SELECT", "Screen", "B", "Browse");
+}
+
+static void message_card(const char *title, const char *body) {
+  dot_card(D, 40, 96, 944, 170);
+  dot_text(D, DOT_TITLE, title, 76, 130, DOT_TEXT, DOT_LEFT, 872);
+  if (body) dot_text(D, DOT_BODY_S, body, 76, 184, DOT_LABEL, DOT_LEFT, 872);
+}
+
 static void draw_nothing(void) {
-  top_bar("Musicdisk", "");
-  text(X0, 172, "NOTHING PLAYING", 66, W_MED, C_INK, A_LEFT);
-  text(X0, 226, "Press START to pick a song.", 33, W_REG, C_MUTE, A_LEFT);
-  bottom_line(NULL, NULL);
+  dot_header(D, "NOW PLAYING", NULL);
+  message_card("Nothing playing", "Press B to pick a song.");
+  dock4("B", "Browse", NULL, NULL, NULL, NULL, NULL, NULL);
 }
 
 static void draw_now(const struct xmp_module *m) {
-  char a[200], b[200];
+  char a[200], b[200], t[16];
   ext_upper(now_name, b, sizeof b);
-  snprintf(a, sizeof a, ps.paused ? "PAUSED" : "%s · %d ch", b, ps.nch);
-  char where[64]; snprintf(where, sizeof where, pl_random ? "Random · %s" : "%s", src[pl_src].name);
-  top_bar(a, where);
+  snprintf(a, sizeof a, "%s · %d CH", b, ps.nch);
+  snprintf(b, sizeof b, pl_random ? "Random · %s" : "Now playing · %s", src[pl_src].name);
+  dot_header(D, b, a);
+  dot_card(D, 40, 96, 944, 528);
+  dot_adot(D, 76, 133, dot_accent(D));
+  dot_text(D, DOT_LABEL_T, ps.paused ? "Paused" : "Playing", 104, 130, DOT_TEXT, DOT_LEFT, 0);
   char title[100]; song_title(m, title, sizeof title);
-  fit(a, sizeof a, title, X1 - X0, 80, W_REG, 0);
-  text(X0, 172, a, 77, W_MED, C_INK, A_LEFT);
+  dot_text(D, DOT_TITLE, title, 76, 170, DOT_TEXT, DOT_LEFT, 872);
   if (now_artist[0]) snprintf(b, sizeof b, "%s · %s", now_artist, now_name);
   else snprintf(b, sizeof b, "%s · %s", now_name, m->type);
-  fit(a, sizeof a, b, X1 - X0, 30, W_REG, 0);
-  text(X0, 222, a, 30, W_REG, C_MUTE, A_LEFT);
-  clock_str(ps.time, a); text(X0, 340, a, 88, W_LIGHT, ps.paused ? C_MUTE : C_INK, A_LEFT);
-  clock_str(ps.total, a); text(X1, 340, a, 30, W_REG, C_MUTE, A_RIGHT);
-  meter(X0, 362, X1 - X0, 22, ps.total > 0 ? (float)ps.time / ps.total : 0);
-  // one LED meter per channel: green blocks in ink, a dithered ghost above them
-  int n = ps.nch, yb = 622, seg = 14, nseg = 11;
-  int bw = n > 16 ? 14 : 48;
-  int gap = n > 1 ? (X1 - X0 - bw) / (n - 1) : 0;
-  if (n > 1 && gap - 6 < bw) bw = gap - 6 > 4 ? gap - 6 : 4;
+  dot_text(D, DOT_BODY_S, b, 76, 220, DOT_LABEL, DOT_LEFT, 872);
+  clock_str(ps.time, t);
+  int tw = dot_time(D, DOT_DISPLAY_XL, t, 74, 278, ps.paused ? DOT_LABEL : DOT_TEXT, DOT_LEFT);
+  clock_str(ps.total, t); snprintf(a, sizeof a, "/ %s", t);
+  dot_text(D, DOT_LABEL_T, a, 74 + tw + 30, 300, DOT_LABEL, DOT_LEFT, 0);
+  dot_progress(D, 76, 396, 872, ps.total > 0 ? (float)ps.time / ps.total : 0, 0);
+  // a column of dots per channel, lit from the bottom by its loudness, left of the round buttons
+  int n = ps.nch, rows = 6, pitch = n ? 600 / n : 40;
+  if (pitch > 40) pitch = 40;
+  int r = pitch >= 20 ? 7 : pitch / 2 - 2 > 2 ? pitch / 2 - 2 : 2;
   for (int c = 0; c < n; c++) {
-    int x = X0 + c * gap; if (x + bw > X1) break;
-    int lit = (int)(vu[c] * nseg * 1.6f + .5f); if (lit > nseg) lit = nseg;
-    int mu = player_muted(c);
-    dither(x, yb - nseg * seg + 2, bw, (nseg - lit) * seg - 2, C_RULE);
-    for (int k = 0; k < lit; k++) {
-      int y = yb - (k + 1) * seg + 2;
-      if (mu) { dither(x, y, bw, seg - 4, C_MUTE); continue; }
-      fill_rect(x, y, bw, seg - 4, k == nseg - 1 ? C_INK : C_ACC);
-      frame(x, y, bw, seg - 4, C_INK);
-    }
-    if (n <= 16) { snprintf(a, sizeof a, "%d", c + 1); text(x, yb + 32, a, 22, W_REG, mu ? C_RULE : C_MUTE, A_LEFT); }
+    int x = 76 + r + c * pitch, lit = (int)(vu[c] * rows * 1.6f + .5f), mu = player_muted(c);
+    if (lit > rows) lit = rows;
+    for (int k = 0; k < rows; k++)
+      dot_circle(D, x, 562 - k * 20, r, k < lit ? (mu ? DOT_DIM : DOT_TEXT) : DOT_TRACK);
+    if (n <= 16) { snprintf(a, sizeof a, "%d", c + 1); dot_text(D, DOT_VALUE, a, x, 584, mu ? DOT_DIM : DOT_LABEL, DOT_CENTER, 0); }
   }
-  if (pl_i + 1 < pl_n) { snprintf(a, sizeof a, "Next  %s", pl[pl_i + 1].name); bottom_line(a, NULL); }
-  else bottom_line(NULL, NULL);
+  int has_prev = pl_i > 0, has_next = pl_i + 1 < pl_n || pl_random;
+  dot_round(D, 698, 520, DOT_I_PREV, 0, has_prev ? 0 : DOT_OFF);
+  dot_round(D, 808, 520, ps.paused ? DOT_I_PLAY : DOT_I_PAUSE, 1, DOT_FOCUS);
+  dot_round(D, 918, 520, DOT_I_NEXT, 0, has_next ? 0 : DOT_OFF);
+  player_dock("L1 R1", "Song");
 }
 
 static void draw_pattern(const struct xmp_module *m) {
   char a[64], b[64];
-  snprintf(a, sizeof a, "Order %d/%d", ps.pos, m->len - 1);
-  snprintf(b, sizeof b, "Pattern %d", ps.pattern);
-  top_bar(a, b);
+  snprintf(a, sizeof a, "Pattern %d · order %d/%d", ps.pattern, ps.pos, m->len - 1);
+  snprintf(b, sizeof b, "Row %02d", ps.row);
   int pages = (ps.nch + 3) / 4; if (pat_page >= pages) pat_page = pages - 1;
   int base = pat_page * 4;
-  static const int xs[5] = { X0, 176, 374, 572, 770 };
-  fill_rect(X0, 100, X1 - X0, 48, C_SURF);
-  dither(X0 + (X1 - X0) / 2, 100, (X1 - X0) / 2, 48, C_RULE);
-  frame(X0, 100, X1 - X0, 50, C_INK);
-  text(xs[0] + 12, 132, "ROW", 22, W_REG, C_INK, A_LEFT);
+  if (pages > 1) { char c[96]; snprintf(c, sizeof c, "%s · ch %d-%d of %d", a, base + 1, base + 4 < ps.nch ? base + 4 : ps.nch, ps.nch); snprintf(a, sizeof a, "%s", c); }
+  dot_header(D, a, b);
+  dot_card(D, 40, 96, 944, 528);
+  static const int xs[5] = { 76, 196, 386, 576, 766 };
+  dot_text(D, DOT_LABEL_T, "Row", xs[0], 124, DOT_LABEL, DOT_LEFT, 0);
   for (int i = 0; i < 4 && base + i < ps.nch; i++) {
     char l[48]; chan_label(m, base + i, l, sizeof l);
-    fit(a, sizeof a, l, 176, 22, W_MED, 0);
-    text(xs[i + 1], 132, a, 22, W_REG, player_muted(base + i) ? C_MUTE : C_INK, A_LEFT);
+    dot_text(D, DOT_LABEL_T, l, xs[i + 1], 124, player_muted(base + i) ? DOT_DIM : DOT_LABEL, DOT_LEFT, 176);
   }
   for (int k = -4; k <= 4; k++) {
-    int r = ps.row + k, y = 214 + (k + 4) * 60, cur = k == 0;
-    if (cur) panel(X0, y - 58, X1 - X0, 58, C_ACC);
-    if (r >= 0 && r < ps.num_rows) {
-      snprintf(a, sizeof a, "%02d", r);
-      text(xs[0] + 12, y - 18, a, 34, cur ? W_MED : W_LIGHT, cur || r % 4 == 0 ? C_INK : C_MUTE, A_LEFT);
-      for (int i = 0; i < 4 && base + i < ps.nch; i++) {
-        struct xmp_event ev;
-        if (!event_at(m, ps.pattern, r, base + i, &ev)) continue;
-        char ns[8]; note_str(ev.note, ns);
-        if (ev.note || ev.ins) { if (ev.ins) snprintf(a, sizeof a, "%s %02d", ns, ev.ins); else snprintf(a, sizeof a, "%s", ns); }
-        else snprintf(a, sizeof a, "·");
-        int lit = ev.note && !player_muted(base + i);
-        text(xs[i + 1], y - 18, a, 34, cur ? W_MED : W_LIGHT, lit ? C_INK : C_MUTE, A_LEFT);
-      }
+    int r = ps.row + k, y = 166 + (k + 4) * 50, cur = k == 0;
+    if (cur) dot_rect(D, 56, y, 912, 48, 22, DOT_PAPER, 255);
+    if (r < 0 || r >= ps.num_rows) continue;
+    snprintf(a, sizeof a, "%02d", r);
+    int ty = y + (48 - dot_line_h(D, DOT_VALUE_L)) / 2;
+    dot_text(D, DOT_VALUE_L, a, xs[0], ty, cur ? DOT_INK : r % 4 == 0 ? DOT_TEXT : DOT_LABEL, DOT_LEFT, 0);
+    for (int i = 0; i < 4 && base + i < ps.nch; i++) {
+      struct xmp_event ev;
+      if (!event_at(m, ps.pattern, r, base + i, &ev)) continue;
+      char ns[8]; note_str(ev.note, ns);
+      if (ev.note || ev.ins) { if (ev.ins) snprintf(a, sizeof a, "%s %02d", ns, ev.ins); else snprintf(a, sizeof a, "%s", ns); }
+      else snprintf(a, sizeof a, "·");
+      int lit = ev.note && !player_muted(base + i);
+      dot_text(D, DOT_VALUE_L, a, xs[i + 1], ty, cur ? (lit ? DOT_INK : 0x555555) : lit ? DOT_TEXT : DOT_DIM, DOT_LEFT, 0);
     }
-    if (!cur && k != -1 && k < 4) dotted(X0, X1, y, C_RULE);
   }
-  if (pages > 1) { snprintf(a, sizeof a, "< %d-%d of %d >", base + 1, base + 4 < ps.nch ? base + 4 : ps.nch, ps.nch); }
-  else snprintf(a, sizeof a, "%d channels", ps.nch);
-  snprintf(b, sizeof b, "Row %02d", ps.row);
-  bottom_line(a, b);
+  player_dock(pages > 1 ? "<>" : NULL, "Channels");
 }
 
 static void draw_scopes(const struct xmp_module *m) {
-  char a[64], t[16];
+  char a[64], t[16], title[100];
+  song_title(m, title, sizeof title);
   clock_str(ps.time, t);
-  fit(a, sizeof a, now_name, 700, 24, W_REG, 0);
-  top_bar(a, t);
+  dot_header(D, title, t);
   int page = scope_sel / 8, base = page * 8;
   SDL_Point pts[240];
-  for (int k = 0; k < 8 && base + k < ps.nch; k++) {
-    int c = base + k, gx = k % 2, gy = k / 2, x = X0 + gx * 472, y = 92 + gy * 148, w = 440, h = 134;
+  int shown = ps.nch - base < 8 ? ps.nch - base : 8, nrows = (shown + 1) / 2;   // the cards share the content area
+  int h = nrows ? (544 - 16 * (nrows - 1)) / nrows : 0, amp = (h - 60) / 2 - 4;
+  for (int k = 0; k < shown; k++) {
+    int c = base + k, x = 40 + (k % 2) * 480, y = 96 + (k / 2) * (h + 16), w = 464;
     int mu = player_muted(c), sel = c == scope_sel;
+    if (sel) dot_rect(D, x, y, w, h, DOT_R_ROW, DOT_PAPER, 255); else dot_card(D, x, y, w, h);
     char l[48]; chan_label(m, c, l, sizeof l);
-    fit(a, sizeof a, l, mu ? 290 : 400, 22, W_REG, 0);
-    int top = window(x, y, w, h, a, sel);
-    if (mu) text(x + w - 14, y + 30, "MUTED", 22, W_REG, C_MUTE, A_RIGHT);
-    int cy = top + (y + h - top) / 2, np = 0;
-    dotted(x + 10, x + w - 10, cy, C_RULE);
-    for (int i = 0; i <= w - 24 && np < 240; i += 2) { float v = chan_value(m, c, i); pts[np].x = x + 12 + i; { float a2 = v * 80; if (a2 > 40) a2 = 40; if (a2 < -40) a2 = -40; pts[np].y = cy - (int)a2; } np++; }
-    SDL_Color col = mu ? C_RULE : C_INK;
-    SDL_SetRenderDrawColor(R, col.r, col.g, col.b, 255);
+    dot_text(D, DOT_LABEL_T, l, x + 24, y + 16, sel ? 0x444444 : mu ? DOT_DIM : DOT_LABEL, DOT_LEFT, mu ? 300 : 416);
+    if (mu) dot_text(D, DOT_LABEL_T, "Muted", x + w - 24, y + 16, sel ? 0x444444 : DOT_LABEL, DOT_RIGHT, 0);
+    int cy = y + 52 + (h - 52) / 2, np = 0;
+    for (int i = 0; i <= w - 48 && np < 240; i += 2) {
+      float v = chan_value(m, c, i) * amp * 2.3f;
+      v = v > amp ? amp : v < -amp ? -amp : v;
+      pts[np].x = x + 24 + i; pts[np].y = cy - (int)v; np++;
+    }
+    Uint32 col = sel ? DOT_INK : mu ? DOT_DIM : DOT_TEXT;
+    SDL_SetRenderDrawColor(R, col >> 16, col >> 8 & 255, col & 255, 255);
     SDL_RenderDrawLines(R, pts, np);
     for (int i = 0; i < np; i++) pts[i].y++;
     SDL_RenderDrawLines(R, pts, np);
   }
-  if (ps.nch > 8) { snprintf(a, sizeof a, "Channels %d-%d of %d", base + 1, base + 8 < ps.nch ? base + 8 : ps.nch, ps.nch); bottom_line(a, "X mute  Y solo"); }
-  else bottom_line(NULL, "X mute  Y solo");
+  (void)a;
+  dock4("X", "Mute", "Y", "Solo", "SELECT", "Screen", "B", "Browse");
+}
+
+static void draw_demo(const struct xmp_module *m) {
+  if (ps.pos != demo_last_pos) { if (demo_last_pos >= 0 && ps.pos % 4 == 0) demo_part = (demo_part + 1) % DEMO_PARTS; demo_last_pos = ps.pos; }
+  SDL_SetRenderDrawColor(R, 0, 0, 0, 255);
+  SDL_RenderClear(R);
+  demo_draw(m, &ps, vu, frame_dt, demo_part);
+  char title[100], t[16], b[64]; song_title(m, title, sizeof title);
+  clock_str(ps.time, t);
+  snprintf(b, sizeof b, "%s · %s", DEMO_NAMES[demo_part], t);
+  int bw = dot_text_w(D, DOT_PILL_MONO, b) + 48;
+  char cut[110]; snprintf(cut, sizeof cut, "%s", title);   // shortened with "…" to leave room for the right pill
+  size_t len = strlen(cut);
+  while (len > 1 && dot_text_w(D, DOT_UI, cut) + 76 > 944 - bw - 24) {
+    do len--; while (len > 1 && ((unsigned char)title[len] & 0xc0) == 0x80);   // whole UTF-8 characters
+    snprintf(cut, sizeof cut, "%.*s…", (int)len, title);
+  }
+  dot_pill(D, 40, 36, cut, 1, 0, DOT_LEFT);
+  dot_pill(D, 984, 36, b, 0, 1, DOT_RIGHT);
+}
+
+// The crumb: the source, then the last two folders under it.
+static void browse_crumb(Source *s, Level *l, char *out, size_t n) {
+  static const char *BASE[NSRC] = { "SD card / Music", "scene.org / Music", "scene.org / Parties", "Downloaded" };
+  int si = (int)(s - src);
+  snprintf(out, n, "%s", BASE[si]);
+  if (s->cache || s->depth == 0) return;
+  char rel[1200];
+  if (s->remote) url_decode(l->path + strlen(s->root), rel, sizeof rel);
+  else snprintf(rel, sizeof rel, "%s", l->path + strlen(s->root));
+  char *part[24]; int np = 0;
+  for (char *tok = strtok(rel, "/"); tok && np < 24; tok = strtok(NULL, "/")) part[np++] = tok;
+  if (np > 2) { size_t k = strlen(out); snprintf(out + k, n - k, " / …"); }
+  for (int i = np > 2 ? np - 2 : 0; i < np; i++) { size_t k = strlen(out); snprintf(out + k, n - k, " / %s", part[i]); }
 }
 
 static void draw_browse(void) {
   Source *s = &src[cur_src];
   Level *l = &s->lv[s->depth];
-  char a[400], b[400];
-  static const char *tabs[NSRC] = { "SD", "SCENE.ORG", "PARTIES", "DOWNLOADED" };
-  for (int i = 0, x = X0; i < NSRC; i++) x += tab(x, 30, tabs[i], i == cur_src) + 12;
+  char a[400], b[400], cnt[48] = "";
+  browse_crumb(s, l, b, sizeof b);
   if (s->cache) {
     long total = 0; for (int i = 0; i < l->list.n; i++) total += l->list.e[i].size;
     char sz[24]; size_str(total, sz, sizeof sz);
-    snprintf(b, sizeof b, "%d song%s · %s", l->list.n, l->list.n == 1 ? "" : "s", sz);
-  } else if (s->remote) url_decode(l->path + strlen(SCENE), b, sizeof b);
-  else snprintf(b, sizeof b, "%s", l->path);
-  char cnt[32] = "";
-  if (!s->loading && !s->failed && l->list.n && !s->cache) snprintf(cnt, sizeof cnt, "%d", l->list.n);
-  fit(a, sizeof a, b, X1 - X0 - 120, 22, W_REG, 1);
-  heading(X0, 130, X1, a, cnt, 22, C_MUTE);
-  double_dash(X0, X1, 162, C_INK);
-  if (s->loading) text(X0, 226, "Loading....", 34, W_LIGHT, C_MUTE, A_LEFT);
-  else if (s->failed) text(X0, 226, s->remote ? "Couldn't reach scene.org. A to try again." : "This folder can't be read.", 30, W_REG, C_MUTE, A_LEFT);
-  else if (!l->list.n) text(X0, 226, s->cache ? "Nothing downloaded yet." : s->remote ? "Nothing playable here." : "No songs yet. Put modules in /Music.", 30, W_REG, C_MUTE, A_LEFT);
-  if (l->cursor >= l->list.n) l->cursor = l->list.n ? l->list.n - 1 : 0;
-  int music_dirs = 0; for (int i = 0; i < l->list.n; i++) if (l->list.e[i].music) music_dirs = 1;
-  if (l->cursor < l->top) l->top = l->cursor;
-  if (l->cursor >= l->top + ROWS) l->top = l->cursor - ROWS + 1;
-  for (int i = 0; i < ROWS && !s->loading; i++) {
-    int k = l->top + i, y = 246 + i * 66;
-    if (k >= l->list.n) break;
-    Entry *e = &l->list.e[k];
-    int sel = k == l->cursor;
-    char sz[200];
-    if (e->dir) snprintf(sz, sizeof sz, "%s", sel ? "->" : e->music ? "music" : "/");
-    else if (e->rank) { char r[100]; snprintf(r, sizeof r, "#%d  %s", e->rank, e->artist); fit(sz, sizeof sz, r, 360, 24, W_REG, 0); }
-    else if (s->cache) fit(sz, sizeof sz, e->artist[0] ? e->artist : e->where, 360, 24, W_REG, 1);
-    else if (e->artist[0]) fit(sz, sizeof sz, e->artist, 330, 24, W_REG, 0);
-    else size_str(e->size, sz, sizeof sz);
-    int rw = text_w(sz, 24, W_REG) + 24;
-    snprintf(b, sizeof b, "%s", e->title[0] ? e->title : e->name);
-    fit(a, sizeof a, b, X1 - X0 - rw - 28, 33, W_REG, 0);
-    int quiet = e->dir && music_dirs && !e->music;   // at a party: the folders without music step back
-    if (sel) panel(X0, y - 60, X1 - X0, 56, C_ACC);
-    text(X0 + 14, y - 20, a, 33, W_REG, quiet && !sel ? C_MUTE : C_INK, A_LEFT);
-    text(X1 - 14, y - 22, sz, 22, W_REG, sel ? C_INK : C_MUTE, A_RIGHT);
-    if (!sel && k != l->cursor - 1 && i < ROWS - 1) dotted(X0, X1, y, C_RULE);
-  }
-  // the bottom line: a download, or what's playing
-  if (job.kind == JOB_RANDOM && !job.picked) bottom_line("Finding a random song....", NULL);
+    snprintf(cnt, sizeof cnt, "%d song%s · %s", l->list.n, l->list.n == 1 ? "" : "s", sz);
+  } else if (!s->loading && !s->failed && l->list.n) snprintf(cnt, sizeof cnt, "%d", l->list.n);
+  dot_header(D, b, cnt);
+
+  // the pill in the last row's place: a download, a random song being found, or what's playing
+  char pill[300] = ""; int pill_dot = 0;
+  if (job.kind == JOB_RANDOM && !job.picked) snprintf(pill, sizeof pill, "Finding a random song…");
   else if (job.kind == JOB_GET || job.kind == JOB_RANDOM) {
     const char *slash = strrchr(job.url, '/');
     url_decode(slash ? slash + 1 : job.url, b, sizeof b);
-    double_dash(X0, X1, 690, C_RULE);
-    fit(a, sizeof a, b, 400, 22, W_REG, 0);
-    text(X0, 734, a, 22, W_REG, C_INK, A_LEFT);
-    float p = job.total > 0 ? (float)job.got / job.total : 0;
-    if (job.total > 0) snprintf(a, sizeof a, "%d%%", (int)(p * 100)); else size_str(job.got, a, sizeof a);
-    text(X1, 734, a, 22, W_REG, C_MUTE, A_RIGHT);
-    meter(X0 + 430, 714, X1 - X0 - 430 - 90, 24, p);
+    if (job.total > 0) snprintf(a, sizeof a, "%d%%", (int)(100.f * job.got / job.total)); else size_str(job.got, a, sizeof a);
+    snprintf(pill, sizeof pill, "Downloading · %.120s · %s", b, a);
   } else if (ps.loaded) {
-    char t[16]; clock_str(ps.time, t);
-    snprintf(b, sizeof b, "%s  %s", ps.paused ? "Paused" : "Playing", now_name);
-    bottom_line(b, t);
-  } else bottom_line(NULL, "SELECT  buttons");
+    snprintf(pill, sizeof pill, "%s · %.150s", ps.paused ? "Paused" : "Playing", now_title[0] ? now_title : now_name);
+    pill_dot = 1;
+  }
+  int rows = pill[0] ? ROWS - 1 : ROWS;
+
+  if (s->loading) message_card("Loading…", NULL);
+  else if (s->failed) message_card(s->remote ? "Couldn't reach scene.org" : "This folder can't be read", s->remote ? "Press A to try again." : NULL);
+  else if (!l->list.n) message_card(s->cache ? "Nothing downloaded yet" : s->remote ? "Nothing playable here" : "No songs yet",
+                                    s->cache ? "Songs you play from scene.org are kept here." : s->remote ? NULL : "Put modules in the Music folder on the SD card.");
+  if (l->cursor >= l->list.n) l->cursor = l->list.n ? l->list.n - 1 : 0;
+  int music_dirs = 0; for (int i = 0; i < l->list.n; i++) if (l->list.e[i].music) music_dirs = 1;
+  if (l->cursor < l->top) l->top = l->cursor;
+  if (l->cursor >= l->top + rows) l->top = l->cursor - rows + 1;
+  for (int i = 0; i < rows && !s->loading; i++) {
+    int k = l->top + i;
+    if (k >= l->list.n) break;
+    Entry *e = &l->list.e[k];
+    char sub[200] = "", meta[32] = "";
+    if (e->dir) { if (e->music) snprintf(meta, sizeof meta, "MUSIC"); }
+    else {
+      if (e->rank) snprintf(sub, sizeof sub, "#%d%s%s", e->rank, e->artist[0] ? " · " : "", e->artist);
+      else if (s->cache) snprintf(sub, sizeof sub, "%s", e->artist[0] ? e->artist : e->where);
+      else snprintf(sub, sizeof sub, "%s", e->artist);
+      size_str(e->size, meta, sizeof meta);
+    }
+    int quiet = e->dir && music_dirs && !e->music;   // at a party: the folders without music step back
+    int playing = ps.loaded && !e->dir && !strcmp(e->name, now_name);
+    dot_row(D, 40, 96 + i * 94, 944, e->dir ? DOT_I_FOLDER : DOT_I_NOTE, e->title[0] ? e->title : e->name,
+            sub[0] ? sub : NULL, meta, (k == l->cursor ? DOT_FOCUS : 0) | (quiet ? DOT_OFF : 0), playing);
+  }
+  if (pill[0]) dot_pill(D, 40, 572, pill, pill_dot, 0, DOT_LEFT);
+
+  const char *ta = NULL;
+  if (s->failed || (!l->list.n && !s->loading)) ta = "Try again";
+  else if (l->list.n && !s->loading) ta = l->list.e[l->cursor].dir ? "Open" : "Play";
+  const char *tb = s->depth ? "Back" : ps.loaded ? "Player" : NULL;
+  dock4(ta ? "A" : NULL, ta, tb ? "B" : NULL, tb,
+        s->depth ? "L1 R1" : "<>", s->depth ? (s->cache ? "Page" : "Letter") : "Source",
+        "Y", s->remote ? "Random" : "Shuffle");
 }
 
 // --- help: what the buttons do -------------------------------------------------------------------------------------
-static void help_column(int x, const char *head, const char *rows[][2], int n) {
-  int top = window(x, 236, 440, 432, head, 0);
-  for (int i = 0; i < n; i++) {
-    int y = top + 44 + i * 54;
-    text(x + 16, y, rows[i][0], 22, W_MED, C_INK, A_LEFT);
-    text(x + 140, y, rows[i][1], 22, W_REG, C_INK, A_LEFT);
-    if (i < n - 1) dotted(x + 16, x + 424, y + 20, C_RULE);
+static void help_panel(int x, const char *label, const DotHint *h, int n) {
+  enum { PITCH = 64 };
+  int y = dot_panel(D, x, 96, 464, dot_panel_h(n * PITCH - 6), label);
+  for (int i = 0; i < n; i++, y += PITCH) {
+    dot_key(D, x + 30, y, h[i].key, 0, 2);
+    dot_text(D, DOT_UI, h[i].text, x + 180, y + (DOT_KEY - dot_line_h(D, DOT_UI)) / 2, DOT_TEXT, DOT_LEFT, 464 - 210);
   }
 }
 
 static void draw_help(void) {
-  top_bar("Musicdisk", "Buttons");
-  text(X0, 150, "DEMOSCENE MUSIC", 66, W_MED, C_INK, A_LEFT);
-  text(X0, 198, "straight from scene.org.", 33, W_REG, C_MUTE, A_LEFT);
-  static const char *browse[][2] = {
-    { "A", "Open, play" }, { "B", "Back" }, { "< >", "Switch source" }, { "L1 R1", "Jump by letter" },
-    { "Y", "Random song" }, { "X X", "Delete download" }, { "START", "To the player" } };
-  static const char *playing[][2] = {
-    { "A", "Pause" }, { "B", "Browse" }, { "SELECT", "Next screen" }, { "L1 R1", "Previous, next" },
-    { "< >", "Effect, channel" }, { "X Y", "Mute, solo" }, { "MENU", "Quit" } };
-  help_column(X0, "BROWSE", browse, 7);
-  help_column(528, "PLAYING", playing, 7);
-  double_dash(X0, X1, 690, C_RULE);
-  text(X0, 734, "[ Press any button ]", 22, W_REG, C_INK, A_LEFT);
-  text(X1, 734, "SELECT in Browse: this again", 22, W_REG, C_MUTE, A_RIGHT);
+  dot_ground(D);
+  dot_title(D, "BUTTONS");
+  dot_header(D, NULL, "Musicdisk");
+  static const DotHint browse[] = { { "A", "Open, play" }, { "B", "Back" }, { "<>", "Switch source" },
+    { "L1 R1", "Jump by letter" }, { "Y", "Random song" }, { "X X", "Delete download" }, { "START", "To the player" } };
+  static const DotHint playing[] = { { "A", "Pause" }, { "B", "Browse" }, { "SELECT", "Next screen" },
+    { "L1 R1", "Previous, next" }, { "<>", "Effect, channel" }, { "X Y", "Mute, solo" }, { "MENU", "Quit" } };
+  help_panel(40, "Browse", browse, 7);
+  help_panel(520, "Playing", playing, 7);
+  dock4("A", "Got it", NULL, NULL, NULL, NULL, NULL, NULL);
 }
 
 static void help_seen(void) {
@@ -732,22 +750,22 @@ static void help_seen(void) {
 }
 
 static void draw(void) {
-  gfx_clear();
-  if (show_help) { draw_help(); return; }
+  dot_frame(D);
+  dot_set_accent(D, DOT_ACCENT_MUSICDISK);
   const struct xmp_module *m = player_module();
   if (m) update_vu(m);
-  if (screen == SCR_BROWSE) draw_browse();
-  else if (!m) draw_nothing();
-  else if (screen == SCR_NOW) draw_now(m);
-  else if (screen == SCR_DEMO) {
-    if (ps.pos != demo_last_pos) { if (demo_last_pos >= 0 && ps.pos % 4 == 0) demo_part = (demo_part + 1) % DEMO_PARTS; demo_last_pos = ps.pos; }
-    char a[200], t[16]; char title[100]; song_title(m, title, sizeof title);
-    fit(a, sizeof a, title, 700, 24, W_REG, 0);
-    clock_str(ps.time, t); top_bar(a, t);
-    demo_draw(m, &ps, vu, frame_dt, demo_part);
+  if (show_help) draw_help();
+  else if (screen == SCR_DEMO && m) { dot_set_night(D, 1); draw_demo(m); dot_set_night(D, 0); }
+  else {
+    dot_ground(D);
+    if (screen == SCR_BROWSE) draw_browse();
+    else if (!m) draw_nothing();
+    else if (screen == SCR_NOW) draw_now(m);
+    else if (screen == SCR_PATTERN) draw_pattern(m);
+    else draw_scopes(m);
   }
-  else if (screen == SCR_PATTERN) draw_pattern(m);
-  else draw_scopes(m);
+  Uint32 now = SDL_GetTicks();
+  if (now < toast_until) { Uint32 left = toast_until - now; dot_toast(D, toast_msg, left < DOT_FADE_MS ? left / (float)DOT_FADE_MS : 1); }
 }
 
 // --- buttons ----------------------------------------------------------------------------------------------------------
@@ -843,6 +861,7 @@ static void on_button(int b) {
 
 // --- screenshots without a device: --shots <dir> <module> ------------------------------------------------------------
 static void save_shot(const char *dir, const char *name) {
+  if (toast_until) { toast_until = 0; draw(); }   // screenshots without a leftover message
   SDL_Surface *s = SDL_CreateRGBSurfaceWithFormat(0, 1024, 768, 32, SDL_PIXELFORMAT_ARGB8888);
   SDL_RenderReadPixels(R, NULL, SDL_PIXELFORMAT_ARGB8888, s->pixels, s->pitch);
   SDL_Surface *rgb = SDL_ConvertSurfaceFormat(s, SDL_PIXELFORMAT_RGB24, 0);   // plain 24-bit BMPs open anywhere
@@ -893,7 +912,7 @@ static void shots(const char *dir, const char *module) {
   screen = SCR_DEMO;
   for (int part = 0; part < DEMO_PARTS; part++) {
     demo_part = part;
-    for (int f = 0; f < 90; f++) { player_pump(1); player_get(&ps); update_vu(player_module()); gfx_clear(); demo_draw(player_module(), &ps, vu, 1 / 50.f, part); }
+    for (int f = 0; f < 90; f++) { player_pump(1); player_get(&ps); update_vu(player_module()); SDL_RenderClear(R); demo_draw(player_module(), &ps, vu, 1 / 50.f, part); }
     demo_last_pos = ps.pos; draw(); char n[32]; snprintf(n, sizeof n, "demo-%d", part); save_shot(dir, n);
   }
 }
