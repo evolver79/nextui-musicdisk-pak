@@ -8,5 +8,5 @@ cp build/out/musicdisk Musicdisk.pak/musicdisk
 rm -rf Musicdisk.pak/fonts && cp -r ui/dot/fonts Musicdisk.pak/fonts
 mkdir -p dist
 rm -f dist/Musicdisk.pak.zip
-(cd Musicdisk.pak && zip -q -X -r ../dist/Musicdisk.pak.zip musicdisk launch.sh fonts LICENSE-libxmp.txt)
+(cd Musicdisk.pak && zip -q -X -r ../dist/Musicdisk.pak.zip musicdisk launch.sh fonts LICENSE-libxmp.txt PxPlus_IBM_VGA_8x16.ttf LICENSE-PxPlus.txt)
 unzip -l dist/Musicdisk.pak.zip

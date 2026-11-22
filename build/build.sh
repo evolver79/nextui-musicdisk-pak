@@ -14,17 +14,18 @@ if [ ! -f build/out/xmp/lib/libxmp.a ]; then
   cd build/out/$XMP && ./configure -q --prefix=/w/build/out/xmp --disable-shared --enable-static CFLAGS='-O2' >/dev/null && make -s -j4 >/dev/null && make -s install >/dev/null
   cd /w
 fi
-gcc -O2 -Wall -Wno-format-truncation -Wno-format-zero-length -Wno-restrict -o build/out/musicdisk src/main.c src/gfx.c src/player.c src/http.c src/browse.c src/demo.c src/zipx.c src/text.c ui/dot/src/dot.c \
+gcc -O2 -Wall -Wno-format-truncation -Wno-format-zero-length -Wno-restrict -o build/out/musicdisk src/main.c src/gfx.c src/player.c src/browse.c src/demo.c src/zipx.c src/text.c src/info.c src/hw.c ui/dot/src/dot.c \
   -Iui/dot/src -Ibuild/out/xmp/include \$(pkg-config --cflags sdl2) \
-  build/out/xmp/lib/libxmp.a \$(pkg-config --libs sdl2) -lSDL2_ttf -lssl -lcrypto -lz -lpthread -lm
+  build/out/xmp/lib/libxmp.a \$(pkg-config --libs sdl2) -lSDL2_ttf -lz -lpthread -lm
 strip build/out/musicdisk
 echo needs: \$(objdump -p build/out/musicdisk | grep NEEDED | tr -s ' ' | cut -d' ' -f3 | tr '\n' ' ')
 if [ \"\$1\" = --shots ]; then
-  mkdir -p build/out/shots /tmp/u/cache/pub/music/groups/abyss_music
-  cp \"\$2\" /tmp/u/cache/pub_music_artists_bigjim_bj-aday.mod
-  cp \"\$2\" /tmp/u/cache/pub_music_artists_alien_aln_dawn.mod
-  cp \"\$2\" /tmp/u/cache/pub/music/groups/abyss_music/abyss%5Bfinal%5D.mod
+  mkdir -p build/out/shots /tmp/sd/Music/Assembly\ 95 /tmp/u
+  cp \"\$2\" /tmp/sd/Music/space_debris.mod
+  cp \"\$2\" /tmp/sd/Music/Assembly\ 95/dope.mod
+  cp test/n_xfiles.xm /tmp/sd/Music/n_xfiles.xm
+  printf '\"N-X Files\" by Nightbeat\\n' > /tmp/sd/Music/n_xfiles.diz
   rm -rf Musicdisk.pak/fonts && cp -r ui/dot/fonts Musicdisk.pak/fonts
-  SDL_VIDEODRIVER=dummy SDL_AUDIODRIVER=dummy build/out/musicdisk /tmp/u Musicdisk.pak --shots build/out/shots \"\$2\" \"\$3\"
+  SDCARD_PATH=/tmp/sd SDL_VIDEODRIVER=dummy SDL_AUDIODRIVER=dummy build/out/musicdisk /tmp/u Musicdisk.pak --shots build/out/shots \"\$2\" \"\$3\"
 fi
 " sh "$@"

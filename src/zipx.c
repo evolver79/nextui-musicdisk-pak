@@ -104,3 +104,38 @@ int zip_songs(const char *zip_path, const char *out_dir, ZipSong *songs, int max
   for (int i = 0; i < nf; i++) free(found[i].data);
   return nf >= 2 ? out : nf;
 }
+
+char *zip_diz(const char *zip_path) {
+  long n; unsigned char *z = read_all(zip_path, &n);
+  if (!z || n < 22) { free(z); return NULL; }
+  long eocd = -1;
+  for (long i = n - 22; i >= 0 && i >= n - 65557; i--) if (rd32(z + i) == 0x06054b50) { eocd = i; break; }
+  if (eocd < 0) { free(z); return NULL; }
+  unsigned total = rd16(z + eocd + 10);
+  unsigned long cd = rd32(z + eocd + 16);
+  char *best = NULL; int best_is_file_id = 0;
+  for (unsigned e = 0; e < total && cd + 46 <= (unsigned long)n; e++) {
+    const unsigned char *h = z + cd;
+    if (rd32(h) != 0x02014b50) break;
+    unsigned method = rd16(h + 10), nl = rd16(h + 28), xl = rd16(h + 30), cl = rd16(h + 32);
+    unsigned long csize = rd32(h + 20), usize = rd32(h + 24), lho = rd32(h + 42);
+    char name[256]; snprintf(name, sizeof name, "%.*s", (int)(nl < 255 ? nl : 255), (const char *)h + 46);
+    cd += 46 + nl + xl + cl;
+    const char *base = strrchr(name, '/'); base = base ? base + 1 : name;
+    const char *dot = strrchr(base, '.');
+    if (!dot || strcasecmp(dot, ".diz") || usize > 65536 || (method != 0 && method != 8)) continue;
+    int file_id = !strcasecmp(base, "file_id.diz");
+    if (best && (best_is_file_id || !file_id)) continue;
+    if (lho + 30 > (unsigned long)n || rd32(z + lho) != 0x04034b50) continue;
+    unsigned long data = lho + 30 + rd16(z + lho + 26) + rd16(z + lho + 28);
+    if (data + csize > (unsigned long)n) continue;
+    unsigned char *buf;
+    if (method == 0) { buf = malloc(csize + 1); memcpy(buf, z + data, csize); usize = csize; }
+    else { buf = inflate_raw(z + data, csize, usize); if (buf) buf = realloc(buf, usize + 1); }
+    if (!buf) continue;
+    buf[usize] = 0;
+    free(best); best = (char *)buf; best_is_file_id = file_id;
+  }
+  free(z);
+  return best;
+}

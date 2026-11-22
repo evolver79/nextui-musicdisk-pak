@@ -1,5 +1,5 @@
-// Musicdisk: a MOD / S3M / XM / IT player for NextUI. Plays from the SD card and from scene.org's mirror,
-// drawn with the shared Dot UI (ui/dot): now playing, demo effects, the pattern, real scopes, and a file browser.
+// Musicdisk: a MOD / S3M / XM / IT player for NextUI. Plays the modules in the SD card's Music folder, drawn with the
+// shared Dot UI (ui/dot): now playing, demo effects, the pattern, real scopes, and a file browser.
 #include <SDL2/SDL.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -10,7 +10,9 @@
 #include <unistd.h>
 #include "browse.h"
 #include "gfx.h"
-#include "http.h"
+#include "info.h"
+#include "hw.h"
+#include <signal.h>
 #include "player.h"
 #include "demo.h"
 #include "text.h"
@@ -25,8 +27,7 @@ enum { BTN_A = SDL_CONTROLLER_BUTTON_B, BTN_B = SDL_CONTROLLER_BUTTON_A, BTN_X =
        BTN_UP = SDL_CONTROLLER_BUTTON_DPAD_UP, BTN_DOWN = SDL_CONTROLLER_BUTTON_DPAD_DOWN,
        BTN_LEFT = SDL_CONTROLLER_BUTTON_DPAD_LEFT, BTN_RIGHT = SDL_CONTROLLER_BUTTON_DPAD_RIGHT };
 
-enum { SCR_NOW, SCR_DEMO, SCR_PATTERN, SCR_SCOPES, SCR_BROWSE };
-#define SCENE "https://ftp.scene.org"
+enum { SCR_NOW, SCR_DEMO, SCR_PATTERN, SCR_SCOPES, SCR_INFO, SCR_BROWSE };
 #define ROWS 5
 
 static int screen = SCR_BROWSE, running = 1;
@@ -37,145 +38,95 @@ static int pat_page, scope_sel;
 static int demo_part, demo_last_pos = -1;   // the demo effect; a new one every four song positions
 static float frame_dt = 1 / 60.f;
 static char toast_msg[128]; static Uint32 toast_until;
+static Uint32 flash_until; static int flash_dir, flash_seek;   // the last skip lights its button for a moment, as in Kino
 static int show_help;   // the buttons, shown on first start and on SELECT in Browse
 
 static void toast(const char *m) { snprintf(toast_msg, sizeof toast_msg, "%s", m); toast_until = SDL_GetTicks() + 2600; }
 
-// --- sources and folders -----------------------------------------------------------------------------------------
-typedef struct { char path[1024]; Listing list; int cursor, top; char *results; int results_state, ranked; } Level;   // results: the party's results.txt, in compo folders
-typedef struct { const char *name; char root[700]; int remote, cache; Level lv[24]; int depth, loading, failed; } Source;
-static Source src[4];
-static int cur_src;
-static int probing;   // the first scene.org listing at start: when it fails, we fall back to the SD card
-static int del_index = -1; static Uint32 del_until;   // X twice deletes a download
-#define NSRC 4
-#define SRC_SD 0
-#define SRC_MUSIC 1
-#define SRC_CACHE 3
+// --- settings: SELECT in Browse. Kept in <user data>/settings.txt as key=value lines. ---------------------------------
+static struct { int separation, interp, filter, leds, screen_off; } set = { 70, 2, 1, 3, 2 };   // leds: 0 off, 1 red, 2 rainbow, 3 channels
+static const char *LED_NAMES[] = { "Off", "Red", "Rainbow", "Channels" };
+static const char *INTERP_NAMES[] = { "Nearest · Amiga", "Linear", "Spline" };
+static const int INTERP_XMP[] = { XMP_INTERP_NEAREST, XMP_INTERP_LINEAR, XMP_INTERP_SPLINE };
+static const char *OFF_NAMES[] = { "Never", "After 30 s", "After 1 min", "After 2 min", "After 5 min" };
+static const int OFF_MS[] = { 0, 30000, 60000, 120000, 300000 };
+enum { O_SEP, O_INTERP, O_FILTER, O_LEDS, O_SCREEN, O_BUTTONS, O_N };
+static int show_settings, opt_sel;
 
-// --- playlist: the playable files of the folder a song was started from --------------------------------------------
-typedef struct { char url[1200]; char name[192]; char title[96], artist[64]; int remote; } Item;
-static Item *pl; static int pl_n, pl_i = -1, pl_src;
-static int pl_random;   // endless random: when the song ends, another random one from scene.org
-static char now_name[192], now_title[96], now_artist[64];
+static void settings_apply(void) { player_sound(set.separation, INTERP_XMP[set.interp], set.filter); }
 
-// --- background job: one folder listing or one download at a time ---------------------------------------------------
-typedef enum { JOB_NONE, JOB_LIST, JOB_GET, JOB_RANDOM } JobKind;
-static struct {
-  JobKind kind; volatile int done; int ok;
-  char url[1200], path[1100];
-  volatile long got, total;
-  Listing list; int src, depth, play_index;
-  volatile int picked;                          // random: a song has been chosen and is downloading
-  char title[96], artist[64], name[192], where[160];
-} job;
-static void cache_path_for(const char *url, char *out, size_t n);
-static int random_song(void);
-
-static void on_progress(long got, long total, void *ud) { (void)ud; job.got = got; job.total = total; }
-static int job_thread(void *arg) {
-  (void)arg;
-  if (job.kind == JOB_LIST) job.ok = list_remote(job.url, &job.list) == 0;
-  else if (job.kind == JOB_RANDOM) job.ok = random_song();
-  else job.ok = http_get_file(job.url, job.path, on_progress, NULL);
-  job.done = 1;
-  return 0;
-}
-static int job_busy(void) { return job.kind != JOB_NONE; }
-static void job_start(void) { job.done = 0; job.got = 0; job.total = -1; job.picked = 0; SDL_DetachThread(SDL_CreateThread(job_thread, "job", NULL)); }
-
-
-static void open_level(Source *s) {
-  Level *l = &s->lv[s->depth];
-  s->failed = 0;
-  if (s->cache) { s->failed = list_cache(s->root, &l->list) != 0; return; }
-  if (!s->remote) { s->failed = list_local(l->path, &l->list) != 0; return; }
-  if (job_busy()) { toast("Still busy, try again in a moment"); return; }
-  s->loading = 1;
-  job.kind = JOB_LIST; job.src = (int)(s - src); job.depth = s->depth;
-  snprintf(job.url, sizeof job.url, "%s", l->path);
-  memset(&job.list, 0, sizeof job.list);
-  job_start();
-}
-
-static void enter_dir(Source *s, const Entry *e) {
-  if (s->depth + 1 >= 24) return;
-  Level *from = &s->lv[s->depth], *to = &s->lv[s->depth + 1];
-  if (s->remote) snprintf(to->path, sizeof to->path, "%s%s", from->path, e->href);
-  else snprintf(to->path, sizeof to->path, "%s/%s", from->path, e->href);
-  memset(&to->list, 0, sizeof to->list); to->cursor = to->top = 0;
-  free(to->results); to->results = NULL; to->results_state = to->ranked = 0;
-  s->depth++;
-  open_level(s);
-}
-
-static void leave_dir(Source *s) {
-  if (s->depth == 0) return;
-  if (s->loading) return;
-  Level *l = &s->lv[s->depth];
-  listing_free(&l->list); free(l->results); l->results = NULL; l->results_state = l->ranked = 0;
-  s->depth--; s->failed = 0;
-}
-
-// Downloads are kept under their path on the server (cache/pub/music/artists/...), so the Downloaded list can say
-// where each one came from, and a second play needs no download.
-static void mkdirs_for(const char *file) {
-  char p[1200]; snprintf(p, sizeof p, "%s", file);
-  for (char *s = p + 1; *s; s++) if (*s == '/') { *s = 0; mkdir(p, 0755); *s = '/'; }
-}
-
-static void cache_path_for(const char *url, char *out, size_t n) {
-  const char *host = strstr(url, "://"); host = host ? host + 3 : url;
-  const char *path = strchr(host, '/'); if (!path) path = "/index";
-  char clean[1100]; size_t o = 0;
-  for (const char *p = path; *p && o + 1 < sizeof clean; p++) clean[o++] = (*p == '?' || *p == '&' || *p == ':' || *p == '=') ? '_' : *p;
-  clean[o] = 0;
-  if (!strncmp(url, SCENE, strlen(SCENE))) snprintf(out, n, "%s%s", cache_dir, clean);
-  else snprintf(out, n, "%s/%.*s%s", cache_dir, (int)(path - host), host, clean);
-  mkdirs_for(out);
-}
-
-// Version 0.1 kept downloads flat (pub_music_artists_alien_aln_dawn.zip). They move into folders here; a folder
-// name with an underscore can't be told apart from the file name, so the first part after the category is taken.
-static void migrate_cache(void) {
-  static const char *CATS[] = { "artists", "compilations", "compos", "disks", "groups", NULL };
-  DIR *d = opendir(cache_dir);
-  if (!d) return;
-  struct dirent *de;
-  while ((de = readdir(d))) {
-    if (strncmp(de->d_name, "pub_music_", 10)) continue;
-    const char *rest = de->d_name + 10;
-    for (int c = 0; CATS[c]; c++) {
-      size_t k = strlen(CATS[c]);
-      if (strncmp(rest, CATS[c], k) || rest[k] != '_') continue;
-      const char *a = rest + k + 1, *us = strchr(a, '_');
-      if (!us) break;
-      char from[1200], to[1200];
-      snprintf(from, sizeof from, "%s/%s", cache_dir, de->d_name);
-      snprintf(to, sizeof to, "%s/pub/music/%s/%.*s/%s", cache_dir, CATS[c], (int)(us - a), a, us + 1);
-      mkdirs_for(to);
-      if (rename(from, to) == 0) fprintf(stderr, "cache: %s -> %s\n", de->d_name, to + strlen(cache_dir) + 1);
-      break;
-    }
+static void settings_load(void) {
+  char p[800]; snprintf(p, sizeof p, "%s/settings.txt", user_dir);
+  FILE *f = fopen(p, "r"); if (!f) return;
+  char k[64]; int v;
+  while (fscanf(f, " %63[^=]=%d", k, &v) == 2) {
+    if (!strcmp(k, "separation") && v >= 0 && v <= 100) set.separation = v;
+    else if (!strcmp(k, "interpolation") && v >= 0 && v < 3) set.interp = v;
+    else if (!strcmp(k, "amiga_filter")) set.filter = !!v;
+    else if (!strcmp(k, "leds") && v >= 0 && v < 4) set.leds = v;
+    else if (!strcmp(k, "screen_off") && v >= 0 && v < 5) set.screen_off = v;
   }
-  closedir(d);
+  fclose(f);
 }
+
+static void settings_save(void) {
+  char p[800]; snprintf(p, sizeof p, "%s/settings.txt", user_dir);
+  FILE *f = fopen(p, "w"); if (!f) return;
+  fprintf(f, "separation=%d\ninterpolation=%d\namiga_filter=%d\nleds=%d\nscreen_off=%d\n", set.separation, set.interp, set.filter, set.leds, set.screen_off);
+  fclose(f);
+}
+
+// --- folders: the Music folder on the SD card, and the folders under it ----------------------------------------------
+typedef struct { char path[1024]; Listing list; int cursor, top; char zip[1100], zip_name[192]; } Level;   // zip: a zip opened like a folder
+static char music_root[700];
+static Level lv[24];
+static int depth, failed;
+
+static void open_level(void) { failed = list_local(lv[depth].path, &lv[depth].list) != 0; }
+
+static void enter_dir(const Entry *e) {
+  if (depth + 1 >= 24) return;
+  Level *to = &lv[depth + 1];
+  snprintf(to->path, sizeof to->path, "%s/%s", lv[depth].path, e->href);
+  memset(&to->list, 0, sizeof to->list); to->cursor = to->top = 0; to->zip[0] = to->zip_name[0] = 0;
+  depth++;
+  open_level();
+}
+
+// ► on a zip with several songs: its songs, like a folder (unpacked once to the cache).
+static void unzip_dir_for(const char *zip, char *out, size_t n);
+static void enter_zip(const Entry *e) {
+  if (depth + 1 >= 24) return;
+  char zip[1100], dir[1200]; snprintf(zip, sizeof zip, "%s/%s", lv[depth].path, e->href);
+  unzip_dir_for(zip, dir, sizeof dir);
+  static ZipSong songs[256];
+  int n = zip_songs(zip, dir, songs, 256);
+  if (n < 2) { toast(n == 1 ? "Just one song in this zip" : "No songs in this zip"); return; }
+  Level *to = &lv[depth + 1];
+  snprintf(to->path, sizeof to->path, "%s", dir);
+  snprintf(to->zip, sizeof to->zip, "%s", zip); snprintf(to->zip_name, sizeof to->zip_name, "%s", e->name);
+  memset(&to->list, 0, sizeof to->list); to->cursor = to->top = 0;
+  depth++;
+  open_level();
+}
+
+static void leave_dir(void) {
+  if (depth == 0) return;
+  listing_free(&lv[depth].list);
+  depth--;
+  open_level();   // read again: the card may have changed
+}
+
+// --- playlist: the songs of the folder a song was started from ------------------------------------------------------
+typedef struct { char url[1200]; char name[192]; char title[96], artist[64]; char zip[1100]; } Item;   // zip: the zip on the card it came from
+static Item *pl; static int pl_n, pl_i = -1, pl_shuffled;
+static char now_name[192], now_title[96], now_artist[64];
 
 // Songs unpacked from a musicdisk zip live in cache/unzipped/<zip name>.<size>/.
 static void unzip_dir_for(const char *zip, char *out, size_t n) {
   struct stat st; long sz = stat(zip, &st) == 0 ? (long)st.st_size : 0;
   const char *b = strrchr(zip, '/');
   snprintf(out, n, "%s/unzipped/%s.%ld", cache_dir, b ? b + 1 : zip, sz);
-}
-
-// Removes a downloaded song (and what was unpacked from it), and the folders it leaves empty.
-static void delete_download(const char *path) {
-  char ud[1200]; unzip_dir_for(path, ud, sizeof ud);
-  DIR *d = opendir(ud);
-  if (d) { struct dirent *de; while ((de = readdir(d))) if (de->d_name[0] != '.') { char f[1500]; snprintf(f, sizeof f, "%s/%s", ud, de->d_name); remove(f); } closedir(d); rmdir(ud); }
-  remove(path);
-  char p[1200]; snprintf(p, sizeof p, "%s", path);
-  for (char *slash; (slash = strrchr(p, '/')) && (size_t)(slash - p) > strlen(cache_dir); ) { *slash = 0; if (rmdir(p) != 0) break; }
 }
 
 // A zip with several songs (a musicdisk, a music pack) becomes its songs, in place in the playlist.
@@ -196,6 +147,7 @@ static int expand_zip(const char *path) {
     snprintf(it->title, sizeof it->title, "%s", songs[k].name);
     char *dot = strrchr(it->title, '.'); if (dot) *dot = 0;
     snprintf(it->artist, sizeof it->artist, "%s", base.title[0] ? base.title : base.name);
+    snprintf(it->zip, sizeof it->zip, "%s", base.zip[0] ? base.zip : base.url);
   }
   pl_n += n - 1;
   char msg[64]; snprintf(msg, sizeof msg, "%d songs in this zip", n); toast(msg);
@@ -211,208 +163,50 @@ static void start_playing(const char *path_in) {
   snprintf(now_name, sizeof now_name, "%s", pl[pl_i].name);
   snprintf(now_title, sizeof now_title, "%s", pl[pl_i].title);
   snprintf(now_artist, sizeof now_artist, "%s", pl[pl_i].artist);
+  info_build(path, pl[pl_i].zip[0] ? pl[pl_i].zip : path, player_module(), player_comment());
   screen = screen == SCR_BROWSE ? SCR_NOW : screen;
 }
 
 static void play_index(int i) {
   if (i < 0 || i >= pl_n) return;
   pl_i = i;
-  Item *it = &pl[i];
-  if (!it->remote) { start_playing(it->url); return; }
-  char path[1100]; cache_path_for(it->url, path, sizeof path);
-  struct stat st;
-  if (stat(path, &st) == 0 && st.st_size > 0) { start_playing(path); return; }
-  if (job_busy()) { toast("Still busy, try again in a moment"); return; }
-  job.kind = JOB_GET; job.play_index = i;
-  snprintf(job.url, sizeof job.url, "%s", it->url);
-  snprintf(job.path, sizeof job.path, "%s", path);
-  job_start();
+  start_playing(pl[i].url);
 }
 
-static void play_from_listing(Source *s, int index) {
-  Level *l = &s->lv[s->depth];
-  free(pl); pl = calloc(l->list.n, sizeof *pl); pl_n = 0; pl_src = (int)(s - src); pl_random = 0;
-  int start = 0;
-  for (int i = 0; i < l->list.n; i++) {
-    Entry *e = &l->list.e[i];
+static void set_playlist(const Listing *list, const char *dir, const char *zip) {   // dir NULL: the hrefs are full paths
+  free(pl); pl = calloc(list->n ? list->n : 1, sizeof *pl); pl_n = 0; pl_shuffled = 0;
+  for (int i = 0; i < list->n; i++) {
+    const Entry *e = &list->e[i];
     if (e->dir) continue;
-    if (i == index) start = pl_n;
     Item *it = &pl[pl_n++];
-    it->remote = s->remote;
-    if (s->cache) snprintf(it->url, sizeof it->url, "%s", e->href);
-    else if (s->remote) snprintf(it->url, sizeof it->url, "%s%s", l->path, e->href);
-    else snprintf(it->url, sizeof it->url, "%s/%s", l->path, e->href);
+    if (dir) snprintf(it->url, sizeof it->url, "%s/%s", dir, e->href); else snprintf(it->url, sizeof it->url, "%s", e->href);
     snprintf(it->name, sizeof it->name, "%s", e->name);
     snprintf(it->title, sizeof it->title, "%s", e->title);
     snprintf(it->artist, sizeof it->artist, "%s", e->artist);
+    if (zip) snprintf(it->zip, sizeof it->zip, "%s", zip);
+    else if (is_zip_name(it->url)) snprintf(it->zip, sizeof it->zip, "%s", it->url);
   }
+}
+
+static void play_from_listing(int index) {
+  Level *l = &lv[depth];
+  set_playlist(&l->list, l->path, l->zip[0] ? l->zip : NULL);
+  int start = 0;
+  for (int i = 0; i < index && i < l->list.n; i++) start += !l->list.e[i].dir;
   play_index(start);
 }
 
-// --- random: down through scene.org's folders by chance, to a song (at parties: year, party, a music compo) ----------
-static int random_song(void) {
-  int parties = job.src == 2;
-  for (int attempt = 0; attempt < 10; attempt++) {
-    char cur[1200]; snprintf(cur, sizeof cur, "%s", src[job.src].root);
-    for (int depth = 0; depth < 7; depth++) {
-      Listing l = {0};
-      if (list_remote(cur, &l) != 0) { listing_free(&l); return 0; }   // offline
-      int nd = 0, nf = 0, nm = 0;
-      for (int i = 0; i < l.n; i++) { if (l.e[i].dir) { nd++; nm += l.e[i].music; } else nf++; }
-      int deep = depth >= (parties ? 3 : 1);   // parties: only songs inside a compo folder, not the root's files
-      if (nf && deep && (!nd || rand() % 3)) {
-        int k = rand() % nf;
-        for (int i = 0; i < l.n; i++) if (!l.e[i].dir && k-- == 0) {
-          Entry *e = &l.e[i];
-          snprintf(job.url, sizeof job.url, "%s%s", cur, e->href);
-          snprintf(job.name, sizeof job.name, "%s", e->name);
-          url_decode(cur + strlen(SCENE) + 5, job.where, sizeof job.where);
-          if (e->diz[0]) {   // its title and artist, from the .diz beside it
-            char du[1500], dp[1200]; snprintf(du, sizeof du, "%s%s", cur, e->diz); cache_path_for(du, dp, sizeof dp);
-            if (http_get_file(du, dp, NULL, NULL)) { char *t = read_text_file(dp, 16384); if (t) { diz_parse(t, job.title, sizeof job.title, job.artist, sizeof job.artist); free(t); } }
-          }
-          break;
-        }
-        listing_free(&l);
-        cache_path_for(job.url, job.path, sizeof job.path);
-        job.picked = 1;
-        struct stat st;
-        if (stat(job.path, &st) == 0 && st.st_size > 0) return 1;
-        return http_get_file(job.url, job.path, on_progress, NULL);
-      }
-      if (!nd || (parties && depth == 2 && !nm)) { listing_free(&l); break; }   // a dead end: start over   // a party without music: start over
-      int want_music = parties && nm, k = rand() % (want_music ? nm : nd);
-      for (int i = 0; i < l.n; i++) if (l.e[i].dir && (!want_music || l.e[i].music) && k-- == 0) { strncat(cur, l.e[i].href, sizeof cur - strlen(cur) - 1); break; }
-      listing_free(&l);
-    }
-  }
-  return 0;
-}
-
-static void start_random(int s) {
-  if (job_busy()) { toast("Still busy, try again in a moment"); return; }
-  job.kind = JOB_RANDOM; job.src = s;
-  job.title[0] = job.artist[0] = job.name[0] = job.where[0] = 0;
-  job_start();
-}
-
-static void job_poll(void) {
-  if (!job_busy() || !job.done) return;
-  JobKind k = job.kind; job.kind = JOB_NONE;
-  if (k == JOB_LIST) {
-    Source *s = &src[job.src];
-    s->loading = 0;
-    if (job.depth == s->depth) { listing_free(&s->lv[s->depth].list); s->lv[s->depth].list = job.list; s->failed = !job.ok; }
-    else listing_free(&job.list);
-    if (!job.ok && probing && job.src == SRC_MUSIC && job.depth == 0) {   // offline: downloads first, else the card
-      cur_src = src[SRC_CACHE].lv[0].list.n ? SRC_CACHE : SRC_SD;
-      toast(cur_src == SRC_CACHE ? "No internet: showing your downloads" : "No internet: showing the SD card");
-    }
-    else if (!job.ok) toast("Couldn't reach scene.org");
-    probing = 0;
-  } else if (k == JOB_GET) {
-    if (job.ok) { pl_i = job.play_index; start_playing(job.path); open_level(&src[SRC_CACHE]); }
-    else toast("Download failed");
-  } else if (k == JOB_RANDOM) {
-    if (!job.ok) { toast("Couldn't find a random song"); return; }
-    free(pl); pl = calloc(1, sizeof *pl); pl_n = 1; pl_i = 0; pl_src = job.src; pl_random = 1;
-    Item *it = &pl[0]; it->remote = 1;
-    snprintf(it->url, sizeof it->url, "%s", job.url); snprintf(it->name, sizeof it->name, "%s", job.name);
-    snprintf(it->title, sizeof it->title, "%s", job.title); snprintf(it->artist, sizeof it->artist, "%s", job.artist[0] ? job.artist : job.where);
-    start_playing(job.path);
-    open_level(&src[SRC_CACHE]);
-  }
-}
-
-// --- .diz files: fetched quietly in the background for the rows on screen and just below ----------------------------
-static struct { volatile int busy, done; int ok; char url[1200], path[1200]; } dz;
-static int dz_thread(void *arg) { (void)arg; dz.ok = http_get_file(dz.url, dz.path, NULL, NULL); dz.done = 1; return 0; }
-
-static void diz_read(Entry *e, const char *path) {
-  char *t = read_text_file(path, 16384);
-  if (t) { diz_parse(t, e->title, sizeof e->title, e->artist, sizeof e->artist); free(t); }
-  e->diz_state = 2;
-}
-
-static int by_rank(const void *a, const void *b) {
-  const Entry *x = a, *y = b;
-  if (x->dir != y->dir) return y->dir - x->dir;
-  if (x->rank && y->rank) return x->rank - y->rank;
-  if (x->rank || y->rank) return x->rank ? -1 : 1;
-  return strcasecmp(x->name, y->name);
-}
-
-// Every song's place from results.txt; the folder is then sorted first to last, so A plays the compo in order.
-static void rank_compo(Level *l) {
-  l->ranked = 1;
-  if (!l->results) return;
-  // which compo list in results.txt holds most of this folder's songs
-  static int votes[512]; memset(votes, 0, sizeof votes);
-  int best = -1;
-  for (int i = 0; i < l->list.n; i++) {
-    int sec; if (l->list.e[i].dir || !results_rank(l->results, l->list.e[i].title, l->list.e[i].name, -1, &sec) || sec < 0 || sec >= 512) continue;
-    if (++votes[sec] > (best >= 0 ? votes[best] : 0)) best = sec;
-  }
-  int changed = 0;
-  for (int i = 0; i < l->list.n; i++) {
-    Entry *e = &l->list.e[i];
-    if (e->dir) continue;
-    int r = best >= 0 ? results_rank(l->results, e->title, e->name, best, NULL) : 0;
-    if (r != e->rank) { e->rank = r; changed = 1; }
-  }
-  if (!changed) return;
-  char keep[384] = ""; if (l->cursor < l->list.n) snprintf(keep, sizeof keep, "%s", l->list.e[l->cursor].href);
-  qsort(l->list.e, l->list.n, sizeof *l->list.e, by_rank);
-  for (int i = 0; i < l->list.n; i++) if (!strcmp(l->list.e[i].href, keep)) l->cursor = i;
-}
-
-static void diz_pump(void) {
-  Source *s = &src[cur_src];
-  if (dz.busy) {
-    if (!dz.done) return;
-    dz.busy = 0;
-    for (int d = 0; d <= s->depth; d++) if (s->lv[d].results_state == 1) {   // it was the results.txt
-      Level *rl = &s->lv[d];
-      rl->results = dz.ok ? read_text_file(dz.path, 1 << 20) : NULL;
-      rl->results_state = rl->results ? 2 : 3;
-    }
-    for (int d = 0; d <= s->depth; d++) for (int i = 0; i < s->lv[d].list.n; i++) {
-      Entry *e = &s->lv[d].list.e[i];
-      if (e->diz_state != 1) continue;
-      char u[1500]; snprintf(u, sizeof u, "%s%s", s->lv[d].path, e->diz);
-      if (strcmp(u, dz.url)) continue;
-      if (dz.ok) diz_read(e, dz.path); else e->diz_state = 3;
-      s->lv[d].ranked = 0;
-    }
-  }
-  if (!s->remote || s->loading) return;
-  Level *l = &s->lv[s->depth];
-  int files = 0; for (int i = 0; i < l->list.n; i++) files += !l->list.e[i].dir;
-  int compo = cur_src == 2 && files > 0;   // a folder of songs at a party: a compo, to be put in placing order
-  if (compo && !l->results_state) {   // the party's results.txt, one folder up
-    char u[1200]; snprintf(u, sizeof u, "%s", l->path);
-    size_t n = strlen(u); if (n && u[n - 1] == '/') u[--n] = 0;
-    char *slash = strrchr(u, '/'); if (slash) slash[1] = 0;
-    strncat(u, "results.txt", sizeof u - strlen(u) - 1);
-    char p[1200]; cache_path_for(u, p, sizeof p);
-    struct stat st;
-    if (stat(p, &st) == 0) { l->results = read_text_file(p, 1 << 20); l->results_state = 2; }
-    else { l->results_state = 1; dz.busy = 1; dz.done = 0; snprintf(dz.url, sizeof dz.url, "%s", u); snprintf(dz.path, sizeof dz.path, "%s", p); SDL_DetachThread(SDL_CreateThread(dz_thread, "results", NULL)); return; }
-  }
-  if (compo && !l->ranked && l->results_state >= 2) rank_compo(l);   // again each time a title comes in
-  int from = compo ? 0 : l->top, to = compo ? l->list.n : l->top + ROWS * 2;
-  for (int k = from, local = 0; k < to && k < l->list.n && local < 40; k++) {
-    Entry *e = &l->list.e[k];
-    if (e->dir || e->diz_state) continue;
-    char u[1500], p[1200]; snprintf(u, sizeof u, "%s%s", l->path, e->diz);
-    cache_path_for(u, p, sizeof p);
-    struct stat st;
-    if (stat(p, &st) == 0) { diz_read(e, p); l->ranked = 0; local++; continue; }   // read before, kept in the cache
-    e->diz_state = 1; dz.busy = 1; dz.done = 0;
-    snprintf(dz.url, sizeof dz.url, "%s", u); snprintf(dz.path, sizeof dz.path, "%s", p);
-    SDL_DetachThread(SDL_CreateThread(dz_thread, "diz", NULL));
-    return;
-  }
+// Y: every song in this folder and the folders under it, in random order.
+static void shuffle_folder(void) {
+  Listing all = {0};
+  list_tree(lv[depth].path, &all);
+  set_playlist(&all, NULL, NULL);
+  listing_free(&all);
+  if (!pl_n) { toast("No songs here"); return; }
+  for (int i = pl_n - 1; i > 0; i--) { int j = rand() % (i + 1); Item t = pl[i]; pl[i] = pl[j]; pl[j] = t; }
+  pl_shuffled = 1;
+  play_index(0);
+  char m[48]; snprintf(m, sizeof m, "Shuffled %d song%s", pl_n, pl_n == 1 ? "" : "s"); toast(m);
 }
 
 // --- reading the module ---------------------------------------------------------------------------------------------
@@ -524,7 +318,8 @@ static void draw_now(const struct xmp_module *m) {
   char a[200], b[200], t[16];
   ext_upper(now_name, b, sizeof b);
   snprintf(a, sizeof a, "%s · %d CH", b, ps.nch);
-  snprintf(b, sizeof b, pl_random ? "Random · %s" : "Now playing · %s", src[pl_src].name);
+  if (pl_n > 1) snprintf(b, sizeof b, "%s · %d of %d", pl_shuffled ? "Shuffle" : "Now playing", pl_i + 1, pl_n);
+  else snprintf(b, sizeof b, "Now playing");
   dot_header(D, b, a);
   dot_card(D, 40, 96, 944, 528);
   dot_adot(D, 76, 133, dot_accent(D));
@@ -540,7 +335,7 @@ static void draw_now(const struct xmp_module *m) {
   dot_text(D, DOT_LABEL_T, a, 74 + tw + 30, 300, DOT_LABEL, DOT_LEFT, 0);
   dot_progress(D, 76, 396, 872, ps.total > 0 ? (float)ps.time / ps.total : 0, 0);
   // a column of dots per channel, lit from the bottom by its loudness, left of the round buttons
-  int n = ps.nch, rows = 6, pitch = n ? 600 / n : 40;
+  int n = ps.nch, rows = 6, pitch = n ? 544 / n : 40;   // the last dot ends by x 620: 40 px clear of the prev button
   if (pitch > 40) pitch = 40;
   int r = pitch >= 20 ? 7 : pitch / 2 - 2 > 2 ? pitch / 2 - 2 : 2;
   for (int c = 0; c < n; c++) {
@@ -550,11 +345,14 @@ static void draw_now(const struct xmp_module *m) {
       dot_circle(D, x, 562 - k * 20, r, k < lit ? (mu ? DOT_DIM : DOT_TEXT) : DOT_TRACK);
     if (n <= 16) { snprintf(a, sizeof a, "%d", c + 1); dot_text(D, DOT_VALUE, a, x, 584, mu ? DOT_DIM : DOT_LABEL, DOT_CENTER, 0); }
   }
-  int has_prev = pl_i > 0, has_next = pl_i + 1 < pl_n || pl_random;
-  dot_round(D, 698, 520, DOT_I_PREV, 0, has_prev ? 0 : DOT_OFF);
-  dot_round(D, 808, 520, ps.paused ? DOT_I_PLAY : DOT_I_PAUSE, 1, DOT_FOCUS);
-  dot_round(D, 918, 520, DOT_I_NEXT, 0, has_next ? 0 : DOT_OFF);
-  player_dock("L1 R1", "Song");
+  int has_prev = pl_i > 0, has_next = pl_i + 1 < pl_n;
+  int lit = SDL_GetTicks() < flash_until ? flash_dir : 0;   // a 10 s skip shows as rewind / forward
+  dot_round(D, 698, 520, lit < 0 && flash_seek ? DOT_I_BACK : DOT_I_PREV, 0, lit < 0 ? DOT_FOCUS | DOT_ON : has_prev ? 0 : DOT_OFF);
+  dot_round(D, 808, 520, ps.paused ? DOT_I_PLAY : DOT_I_PAUSE, 1, lit ? 0 : DOT_FOCUS);
+  dot_round(D, 918, 520, lit > 0 && flash_seek ? DOT_I_FWD : DOT_I_NEXT, 0, lit > 0 ? DOT_FOCUS | DOT_ON : has_next ? 0 : DOT_OFF);
+  dot_text(D, DOT_LABEL_T, "L1", 698, 572, has_prev ? DOT_LABEL : DOT_DIM, DOT_CENTER, 0);   // the buttons that do it
+  dot_text(D, DOT_LABEL_T, "R1", 918, 572, has_next ? DOT_LABEL : DOT_DIM, DOT_CENTER, 0);
+  player_dock("<>", "10 s");   // L1 R1 for the song: the round buttons above say it, and the buttons screen
 }
 
 static void draw_pattern(const struct xmp_module *m) {
@@ -643,15 +441,13 @@ static void draw_demo(const struct xmp_module *m) {
   dot_pill(D, 984, 36, b, 0, 1, DOT_RIGHT);
 }
 
-// The crumb: the source, then the last two folders under it.
-static void browse_crumb(Source *s, Level *l, char *out, size_t n) {
-  static const char *BASE[NSRC] = { "SD card / Music", "scene.org / Music", "scene.org / Parties", "Downloaded" };
-  int si = (int)(s - src);
-  snprintf(out, n, "%s", BASE[si]);
-  if (s->cache || s->depth == 0) return;
+// The crumb: "Music", then the last two folders under it.
+static void browse_crumb(char *out, size_t n) {
+  snprintf(out, n, "Music");
+  if (depth == 0) return;
   char rel[1200];
-  if (s->remote) url_decode(l->path + strlen(s->root), rel, sizeof rel);
-  else snprintf(rel, sizeof rel, "%s", l->path + strlen(s->root));
+  if (lv[depth].zip[0]) snprintf(rel, sizeof rel, "%s/%s", lv[depth - 1].path + strlen(music_root), lv[depth].zip_name);
+  else snprintf(rel, sizeof rel, "%s", lv[depth].path + strlen(music_root));
   char *part[24]; int np = 0;
   for (char *tok = strtok(rel, "/"); tok && np < 24; tok = strtok(NULL, "/")) part[np++] = tok;
   if (np > 2) { size_t k = strlen(out); snprintf(out + k, n - k, " / …"); }
@@ -659,65 +455,40 @@ static void browse_crumb(Source *s, Level *l, char *out, size_t n) {
 }
 
 static void draw_browse(void) {
-  Source *s = &src[cur_src];
-  Level *l = &s->lv[s->depth];
-  char a[400], b[400], cnt[48] = "";
-  browse_crumb(s, l, b, sizeof b);
-  if (s->cache) {
-    long total = 0; for (int i = 0; i < l->list.n; i++) total += l->list.e[i].size;
-    char sz[24]; size_str(total, sz, sizeof sz);
-    snprintf(cnt, sizeof cnt, "%d song%s · %s", l->list.n, l->list.n == 1 ? "" : "s", sz);
-  } else if (!s->loading && !s->failed && l->list.n) snprintf(cnt, sizeof cnt, "%d", l->list.n);
+  Level *l = &lv[depth];
+  char b[400], cnt[48] = "";
+  browse_crumb(b, sizeof b);
+  if (!failed && l->list.n) snprintf(cnt, sizeof cnt, "%d", l->list.n);
   dot_header(D, b, cnt);
 
-  // the pill in the last row's place: a download, a random song being found, or what's playing
-  char pill[300] = ""; int pill_dot = 0;
-  if (job.kind == JOB_RANDOM && !job.picked) snprintf(pill, sizeof pill, "Finding a random song…");
-  else if (job.kind == JOB_GET || job.kind == JOB_RANDOM) {
-    const char *slash = strrchr(job.url, '/');
-    url_decode(slash ? slash + 1 : job.url, b, sizeof b);
-    if (job.total > 0) snprintf(a, sizeof a, "%d%%", (int)(100.f * job.got / job.total)); else size_str(job.got, a, sizeof a);
-    snprintf(pill, sizeof pill, "Downloading · %.120s · %s", b, a);
-  } else if (ps.loaded) {
-    snprintf(pill, sizeof pill, "%s · %.150s", ps.paused ? "Paused" : "Playing", now_title[0] ? now_title : now_name);
-    pill_dot = 1;
-  }
+  // what's playing, in the last row's place
+  char pill[300] = "";
+  if (ps.loaded) snprintf(pill, sizeof pill, "%s · %.150s", ps.paused ? "Paused" : "Playing", now_title[0] ? now_title : now_name);
   int rows = pill[0] ? ROWS - 1 : ROWS;
 
-  if (s->loading) message_card("Loading…", NULL);
-  else if (s->failed) message_card(s->remote ? "Couldn't reach scene.org" : "This folder can't be read", s->remote ? "Press A to try again." : NULL);
-  else if (!l->list.n) message_card(s->cache ? "Nothing downloaded yet" : s->remote ? "Nothing playable here" : "No songs yet",
-                                    s->cache ? "Songs you play from scene.org are kept here." : s->remote ? NULL : "Put modules in the Music folder on the SD card.");
+  if (failed) message_card("This folder can't be read", "Press A to try again.");
+  else if (!l->list.n) message_card(depth ? "No songs in this folder" : "No songs yet",
+                                    depth ? NULL : "Put MOD, S3M, XM or IT files in the Music folder on the SD card.");
   if (l->cursor >= l->list.n) l->cursor = l->list.n ? l->list.n - 1 : 0;
-  int music_dirs = 0; for (int i = 0; i < l->list.n; i++) if (l->list.e[i].music) music_dirs = 1;
   if (l->cursor < l->top) l->top = l->cursor;
   if (l->cursor >= l->top + rows) l->top = l->cursor - rows + 1;
-  for (int i = 0; i < rows && !s->loading; i++) {
+  for (int i = 0; i < rows; i++) {
     int k = l->top + i;
     if (k >= l->list.n) break;
     Entry *e = &l->list.e[k];
-    char sub[200] = "", meta[32] = "";
-    if (e->dir) { if (e->music) snprintf(meta, sizeof meta, "MUSIC"); }
-    else {
-      if (e->rank) snprintf(sub, sizeof sub, "#%d%s%s", e->rank, e->artist[0] ? " · " : "", e->artist);
-      else if (s->cache) snprintf(sub, sizeof sub, "%s", e->artist[0] ? e->artist : e->where);
-      else snprintf(sub, sizeof sub, "%s", e->artist);
-      size_str(e->size, meta, sizeof meta);
-    }
-    int quiet = e->dir && music_dirs && !e->music;   // at a party: the folders without music step back
+    char meta[32] = "";
+    if (!e->dir) size_str(e->size, meta, sizeof meta);
     int playing = ps.loaded && !e->dir && !strcmp(e->name, now_name);
     dot_row(D, 40, 96 + i * 94, 944, e->dir ? DOT_I_FOLDER : DOT_I_NOTE, e->title[0] ? e->title : e->name,
-            sub[0] ? sub : NULL, meta, (k == l->cursor ? DOT_FOCUS : 0) | (quiet ? DOT_OFF : 0), playing);
+            e->artist[0] ? e->artist : NULL, meta, k == l->cursor ? DOT_FOCUS : 0, playing);
   }
-  if (pill[0]) dot_pill(D, 40, 572, pill, pill_dot, 0, DOT_LEFT);
+  if (pill[0]) dot_pill(D, 40, 572, pill, 1, 0, DOT_LEFT);
 
   const char *ta = NULL;
-  if (s->failed || (!l->list.n && !s->loading)) ta = "Try again";
-  else if (l->list.n && !s->loading) ta = l->list.e[l->cursor].dir ? "Open" : "Play";
-  const char *tb = s->depth ? "Back" : ps.loaded ? "Player" : NULL;
-  dock4(ta ? "A" : NULL, ta, tb ? "B" : NULL, tb,
-        s->depth ? "L1 R1" : "<>", s->depth ? (s->cache ? "Page" : "Letter") : "Source",
-        "Y", s->remote ? "Random" : "Shuffle");
+  if (failed || !l->list.n) ta = "Try again";
+  else ta = l->list.e[l->cursor].dir ? "Open" : "Play";
+  const char *tb = depth ? "Back" : ps.loaded ? "Player" : NULL;
+  dock4(ta ? "A" : NULL, ta, tb ? "B" : NULL, tb, l->list.n > ROWS ? "L1 R1" : NULL, "Letter", l->list.n ? "Y" : NULL, "Shuffle");
 }
 
 // --- help: what the buttons do -------------------------------------------------------------------------------------
@@ -734,13 +505,63 @@ static void draw_help(void) {
   dot_ground(D);
   dot_title(D, "BUTTONS");
   dot_header(D, NULL, "Musicdisk");
-  static const DotHint browse[] = { { "A", "Open, play" }, { "B", "Back" }, { "<>", "Switch source" },
-    { "L1 R1", "Jump by letter" }, { "Y", "Random song" }, { "X X", "Delete download" }, { "START", "To the player" } };
+  static const DotHint browse[] = { { "A", "Open, play" }, { "B", "Back" }, { "L1 R1", "Jump by letter" },
+    { "Y", "Shuffle folder" }, { "SELECT", "Settings" }, { "START", "To the player" }, { "MENU", "Quit" } };
   static const DotHint playing[] = { { "A", "Pause" }, { "B", "Browse" }, { "SELECT", "Next screen" },
-    { "L1 R1", "Previous, next" }, { "<>", "Effect, channel" }, { "X Y", "Mute, solo" }, { "MENU", "Quit" } };
+    { "L1 R1", "Previous, next" }, { "<>", "Skip 10 s, effect" }, { "X Y", "Mute, solo" }, { "START", "Screen off" } };
   help_panel(40, "Browse", browse, 7);
   help_panel(520, "Playing", playing, 7);
   dock4("A", "Got it", NULL, NULL, NULL, NULL, NULL, NULL);
+}
+
+static void draw_settings(void) {
+  dot_ground(D);
+  dot_title(D, "SETTINGS");
+  dot_header(D, NULL, "Musicdisk");
+  enum { P = DOT_OPT_PITCH };
+  int f[O_N]; for (int i = 0; i < O_N; i++) f[i] = i == opt_sel ? DOT_FOCUS : 0;
+  int y = dot_panel(D, 40, 96, 464, dot_panel_h(3 * P), "Sound");
+  dot_opt_slider(D, 70, y, 404, "Stereo separation", set.separation / 100.f, f[O_SEP]);
+  dot_opt(D, 70, y + P, 404, "Interpolation", INTERP_NAMES[set.interp], f[O_INTERP]);
+  dot_opt_toggle(D, 70, y + 2 * P, 404, "Amiga filter", set.filter, f[O_FILTER]);
+  y = dot_panel(D, 520, 96, 464, dot_panel_h(3 * P), "Brick");
+  dot_opt(D, 550, y, 404, "Lights", LED_NAMES[set.leds], f[O_LEDS]);
+  dot_opt(D, 550, y + P, 404, "Screen off", OFF_NAMES[set.screen_off], f[O_SCREEN]);
+  dot_opt(D, 550, y + 2 * P, 404, "Buttons", "", f[O_BUTTONS]);
+  static const char *HELP[O_N] = {
+    "Amiga songs put each channel hard left or right; less is kinder on headphones.",
+    "Nearest gives the crunchy Amiga sound. Spline is the smoothest.",
+    "The Amiga's low-pass filter, switched on and off by the songs themselves.",
+    "Pulse with the music: in red, in colours that drift through the song, or a colour for each channel.",
+    "While a song plays and no button is pressed. START: off now. Any button wakes it.",
+    "What every button does: press A." };
+  static const char *TITLE[O_N] = { "Stereo separation", "Interpolation", "Amiga filter", "Lights", "Screen off", "Buttons" };
+  char t[80];
+  if (opt_sel == O_SEP) snprintf(t, sizeof t, "%s · %d %%", TITLE[opt_sel], set.separation); else snprintf(t, sizeof t, "%s", TITLE[opt_sel]);
+  dot_card(D, 40, 374, 944, 136);
+  dot_text(D, DOT_UI, t, 76, 404, DOT_TEXT, DOT_LEFT, 872);
+  dot_text(D, DOT_BODY_S, HELP[opt_sel], 76, 448, DOT_LABEL, DOT_LEFT, 872);
+  dock4("<>", "Change", "B", "Back", NULL, NULL, NULL, NULL);
+}
+
+static void settings_button(int b) {
+  int d = b == BTN_LEFT ? -1 : b == BTN_RIGHT || b == BTN_A ? 1 : 0;
+  switch (b) {
+    case BTN_UP: opt_sel = (opt_sel + O_N - 1) % O_N; return;
+    case BTN_DOWN: opt_sel = (opt_sel + 1) % O_N; return;
+    case BTN_B: case BTN_SELECT: show_settings = 0; return;
+    case BTN_MENU: running = 0; return;
+  }
+  if (!d) return;
+  switch (opt_sel) {
+    case O_SEP: set.separation += d * 10; if (set.separation < 0) set.separation = 0; if (set.separation > 100) set.separation = 100; break;
+    case O_INTERP: set.interp = (set.interp + 3 + d) % 3; break;
+    case O_FILTER: set.filter = !set.filter; break;
+    case O_LEDS: set.leds = (set.leds + 4 + d) % 4; break;
+    case O_SCREEN: set.screen_off = (set.screen_off + 5 + d) % 5; break;
+    case O_BUTTONS: if (b == BTN_A) { show_settings = 0; show_help = 1; } return;
+  }
+  settings_apply(); settings_save();
 }
 
 static void help_seen(void) {
@@ -753,8 +574,8 @@ static void draw(void) {
   dot_frame(D);
   dot_set_accent(D, DOT_ACCENT_MUSICDISK);
   const struct xmp_module *m = player_module();
-  if (m) update_vu(m);
   if (show_help) draw_help();
+  else if (show_settings) draw_settings();
   else if (screen == SCR_DEMO && m) { dot_set_night(D, 1); draw_demo(m); dot_set_night(D, 0); }
   else {
     dot_ground(D);
@@ -762,6 +583,7 @@ static void draw(void) {
     else if (!m) draw_nothing();
     else if (screen == SCR_NOW) draw_now(m);
     else if (screen == SCR_PATTERN) draw_pattern(m);
+    else if (screen == SCR_INFO) { char t[100]; song_title(m, t, sizeof t); info_draw(m, t); player_dock("<>", "Page"); }
     else draw_scopes(m);
   }
   Uint32 now = SDL_GetTicks();
@@ -793,67 +615,56 @@ static void letter_jump(Level *l, int dir) {
   char m[8]; int c = first_letter(&e[k]); snprintf(m, sizeof m, "%c", c == '#' ? '#' : toupper(c)); toast(m);
 }
 
+// ◄ ► on Now playing: 10 seconds back or ahead; past the end, the next song.
+static void flash(int dir, int is_seek) { flash_dir = dir; flash_seek = is_seek; flash_until = SDL_GetTicks() + 450; }
+
+static void seek(int ms) {
+  if (!ps.loaded) return;
+  flash(ms < 0 ? -1 : 1, 1);
+  if (player_seek(ms) >= 0) { player_get(&ps); return; }
+  if (pl_i + 1 < pl_n) { flash(1, 0); play_index(pl_i + 1); } else toast("Last song");
+}
+
 static void on_button(int b) {
   if (show_help) { if (b == BTN_MENU) running = 0; help_seen(); return; }
+  if (show_settings) { settings_button(b); return; }
   if (b == BTN_MENU) { running = 0; return; }
   if (screen == SCR_BROWSE) {
-    Source *s = &src[cur_src];
-    Level *l = &s->lv[s->depth];
+    Level *l = &lv[depth];
     int n = l->list.n;
     switch (b) {
       case BTN_UP: if (n) l->cursor = (l->cursor + n - 1) % n; break;
       case BTN_DOWN: if (n) l->cursor = (l->cursor + 1) % n; break;
-      case BTN_L1: case BTN_R1:
+      case BTN_L1: case BTN_R1: if (n) letter_jump(l, b == BTN_R1 ? 1 : -1); break;
+      case BTN_LEFT: if (depth) leave_dir(); break;
+      case BTN_RIGHT:
         if (!n) break;
-        if (s->cache) {   // newest first: by page
-          if (b == BTN_L1) l->cursor = l->cursor - ROWS < 0 ? 0 : l->cursor - ROWS;
-          else l->cursor = l->cursor + ROWS >= n ? n - 1 : l->cursor + ROWS;
-        } else letter_jump(l, b == BTN_R1 ? 1 : -1);
+        if (l->list.e[l->cursor].dir) enter_dir(&l->list.e[l->cursor]);
+        else if (is_zip_name(l->list.e[l->cursor].name)) enter_zip(&l->list.e[l->cursor]);
         break;
-      case BTN_LEFT: case BTN_RIGHT: {
-        cur_src = (cur_src + (b == BTN_LEFT ? NSRC - 1 : 1)) % NSRC;
-        Source *t = &src[cur_src];   // the card and downloads are read again each time; scene.org once
-        if (!t->remote ? t->depth == 0 : (!t->lv[0].list.n && !t->loading)) open_level(t);
-        break;
-      }
-      case BTN_Y:
-        if (s->remote) start_random(cur_src);
-        else if (n) {   // the card and downloads: this list, shuffled
-          play_from_listing(s, l->cursor);
-          for (int i = pl_n - 1; i > 0; i--) { int j = rand() % (i + 1); Item t = pl[i]; pl[i] = pl[j]; pl[j] = t; }
-          play_index(0);
-          toast("Shuffled");
-        }
-        break;
-      case BTN_X:
-        if (!s->cache || !n) break;
-        if (del_index == l->cursor && SDL_GetTicks() < del_until) {
-          delete_download(l->list.e[l->cursor].href);
-          open_level(s); del_index = -1; toast("Deleted");
-        } else { del_index = l->cursor; del_until = SDL_GetTicks() + 2500; toast("Press X again to delete this song"); }
-        break;
+      case BTN_Y: shuffle_folder(); break;
       case BTN_A:
-        if (s->failed || (!n && !s->loading)) { open_level(s); break; }
-        if (!n || s->loading) break;
-        if (l->list.e[l->cursor].dir) enter_dir(s, &l->list.e[l->cursor]);
-        else play_from_listing(s, l->cursor);
+        if (failed || !n) { open_level(); break; }
+        if (l->list.e[l->cursor].dir) enter_dir(&l->list.e[l->cursor]);
+        else play_from_listing(l->cursor);
         break;
-      case BTN_B: if (s->depth) leave_dir(s); else if (ps.loaded) screen = SCR_NOW; break;
+      case BTN_B: if (depth) leave_dir(); else if (ps.loaded) screen = SCR_NOW; break;
       case BTN_START: if (ps.loaded) screen = SCR_NOW; break;
-      case BTN_SELECT: show_help = 1; break;
+      case BTN_SELECT: show_settings = 1; break;
     }
     return;
   }
   switch (b) {
-    case BTN_START: case BTN_B: screen = SCR_BROWSE; break;
-    case BTN_SELECT: screen = screen == SCR_NOW ? SCR_DEMO : screen == SCR_DEMO ? SCR_PATTERN : screen == SCR_PATTERN ? SCR_SCOPES : SCR_NOW; break;
+    case BTN_B: screen = SCR_BROWSE; break;
+    case BTN_START: if (ps.loaded) screen_power(0); break;
+    case BTN_SELECT: screen = screen == SCR_NOW ? SCR_DEMO : screen == SCR_DEMO ? SCR_PATTERN : screen == SCR_PATTERN ? SCR_SCOPES : screen == SCR_SCOPES ? SCR_INFO : SCR_NOW; break;
     case BTN_A: if (ps.loaded) player_pause(!ps.paused); break;
-    case BTN_L1: if (pl_i > 0) play_index(pl_i - 1); break;
-    case BTN_R1: if (pl_i + 1 < pl_n) play_index(pl_i + 1); else if (pl_random) start_random(pl_src); break;
-    case BTN_LEFT: if (screen == SCR_DEMO) demo_part = (demo_part + DEMO_PARTS - 1) % DEMO_PARTS; if (screen == SCR_PATTERN && pat_page > 0) pat_page--; if (screen == SCR_SCOPES && scope_sel > 0) scope_sel--; break;
-    case BTN_RIGHT: if (screen == SCR_DEMO) demo_part = (demo_part + 1) % DEMO_PARTS; if (screen == SCR_PATTERN && (pat_page + 1) * 4 < ps.nch) pat_page++; if (screen == SCR_SCOPES && scope_sel + 1 < ps.nch) scope_sel++; break;
-    case BTN_UP: if (screen == SCR_SCOPES && scope_sel >= 2) scope_sel -= 2; break;
-    case BTN_DOWN: if (screen == SCR_SCOPES && scope_sel + 2 < ps.nch) scope_sel += 2; break;
+    case BTN_L1: if (pl_i > 0) { flash(-1, 0); play_index(pl_i - 1); } break;
+    case BTN_R1: if (pl_i + 1 < pl_n) { flash(1, 0); play_index(pl_i + 1); } break;
+    case BTN_LEFT: if (screen == SCR_INFO) info_scroll(-INFO_PAGE); if (screen == SCR_NOW) seek(-10000); if (screen == SCR_DEMO) demo_part = (demo_part + DEMO_PARTS - 1) % DEMO_PARTS; if (screen == SCR_PATTERN && pat_page > 0) pat_page--; if (screen == SCR_SCOPES && scope_sel > 0) scope_sel--; break;
+    case BTN_RIGHT: if (screen == SCR_INFO) info_scroll(INFO_PAGE); if (screen == SCR_NOW) seek(10000); if (screen == SCR_DEMO) demo_part = (demo_part + 1) % DEMO_PARTS; if (screen == SCR_PATTERN && (pat_page + 1) * 4 < ps.nch) pat_page++; if (screen == SCR_SCOPES && scope_sel + 1 < ps.nch) scope_sel++; break;
+    case BTN_UP: if (screen == SCR_SCOPES && scope_sel >= 2) scope_sel -= 2; if (screen == SCR_INFO) info_scroll(-1); break;
+    case BTN_DOWN: if (screen == SCR_SCOPES && scope_sel + 2 < ps.nch) scope_sel += 2; if (screen == SCR_INFO) info_scroll(1); break;
     case BTN_X: if (screen != SCR_NOW || 1) player_mute(scope_sel, !player_muted(scope_sel)); break;
     case BTN_Y: solo(scope_sel); break;
   }
@@ -871,25 +682,10 @@ static void save_shot(const char *dir, const char *name) {
 
 static const char *zip_test;
 static void shots(const char *dir, const char *module) {
-  cur_src = 1; open_level(&src[1]);
-  while (job_busy()) { SDL_Delay(50); job_poll(); }
+  open_level();
   draw(); save_shot(dir, "browse");
   show_help = 1; draw(); save_shot(dir, "help"); show_help = 0;
-  migrate_cache(); cur_src = SRC_CACHE; open_level(&src[SRC_CACHE]); draw(); save_shot(dir, "downloads");
-  // a compo folder, with the titles from its .diz files
-  cur_src = 2; snprintf(src[2].lv[0].path, sizeof src[2].lv[0].path, SCENE "/pub/parties/1995/assembly95/m4ch/");
-  open_level(&src[2]);
-  while (job_busy()) { SDL_Delay(50); job_poll(); }
-  for (int i = 0; i < 3000; i++) { diz_pump(); SDL_Delay(20); int left = 0; for (int k = 0; k < src[2].lv[0].list.n; k++) if (src[2].lv[0].list.e[k].diz_state < 2) left = 1; if (!left && src[2].lv[0].ranked) break; }
-  src[2].lv[0].cursor = 0;
-  draw(); save_shot(dir, "compo");
-  // a random song from the parties
-  start_random(2);
-  while (job_busy()) { SDL_Delay(50); if (job.done) { fprintf(stderr, "random: %s | %s | %s | %s\n", job.ok ? "ok" : "failed", job.url, job.title, job.artist); job_poll(); } }
-  // a party folder: music folders first
-  snprintf(src[2].lv[0].path, sizeof src[2].lv[0].path, SCENE "/pub/parties/1995/assembly95/");
-  open_level(&src[2]); while (job_busy()) { SDL_Delay(50); job_poll(); }
-  draw(); save_shot(dir, "party");
+  show_settings = 1; draw(); save_shot(dir, "settings"); show_settings = 0;
   // a zip with two songs becomes two playlist items
   if (zip_test) {
     free(pl); pl = calloc(1, sizeof *pl); pl_n = 1; pl_i = 0;
@@ -897,7 +693,7 @@ static void shots(const char *dir, const char *module) {
     start_playing(zip_test);
     fprintf(stderr, "zip test: %d playlist items, playing %s\n", pl_n, now_name);
   }
-  pl = calloc(1, sizeof *pl); pl_n = 1; pl_i = 0; pl_src = 0;
+  free(pl); pl = calloc(1, sizeof *pl); pl_n = 1; pl_i = 0;
   const char *slash = strrchr(module, '/');
   snprintf(pl[0].name, sizeof pl[0].name, "%s", slash ? slash + 1 : module);
   snprintf(pl[0].url, sizeof pl[0].url, "%s", module);
@@ -907,14 +703,68 @@ static void shots(const char *dir, const char *module) {
   player_get(&ps);
   for (int i = 0; i < 12; i++) update_vu(player_module());
   screen = SCR_NOW; draw(); save_shot(dir, "now");
+  flash(1, 1); draw(); save_shot(dir, "now-seek"); flash_until = 0;
   screen = SCR_PATTERN; draw(); save_shot(dir, "pattern");
   screen = SCR_SCOPES; scope_sel = 2; draw(); save_shot(dir, "scopes");
+  screen = SCR_INFO; draw(); save_shot(dir, "info");
+  info_scroll(INFO_PAGE); draw(); save_shot(dir, "info-2"); info_scroll(-1000);
   screen = SCR_DEMO;
   for (int part = 0; part < DEMO_PARTS; part++) {
     demo_part = part;
     for (int f = 0; f < 90; f++) { player_pump(1); player_get(&ps); update_vu(player_module()); SDL_RenderClear(R); demo_draw(player_module(), &ps, vu, 1 / 50.f, part); }
     demo_last_pos = ps.pos; draw(); char n[32]; snprintf(n, sizeof n, "demo-%d", part); save_shot(dir, n);
   }
+}
+
+static void restore_hw(void) { leds_restore(); screen_power(1); }
+static void on_signal(int sig) { restore_hw(); signal(sig, SIG_DFL); raise(sig); }
+
+// The lights: quick up, slower down. Red and Rainbow: every LED at the song's loudness (rainbow: the colour drifts with
+// the song's time). Channels: each LED follows a channel, in that channel's own colour.
+static Uint32 hue_rgb(float h, float v) {   // h 0..1 around the colour wheel, full saturation; v 0..1
+  h -= (int)h; if (h < 0) h += 1;
+  float r = 0, g = 0, b = 0, x = h * 6, f = x - (int)x;
+  switch ((int)x % 6) { case 0: r = 1; g = f; break; case 1: r = 1 - f; g = 1; break; case 2: g = 1; b = f; break;
+                        case 3: g = 1 - f; b = 1; break; case 4: r = f; b = 1; break; default: r = 1; b = 1 - f; }
+  return (Uint32)(r * v * 255) << 16 | (Uint32)(g * v * 255) << 8 | (Uint32)(b * v * 255);
+}
+static Uint32 scale_rgb(Uint32 c, float v) { return (Uint32)((c >> 16 & 255) * v) << 16 | (Uint32)((c >> 8 & 255) * v) << 8 | (Uint32)((c & 255) * v); }
+
+static void lights(void) {
+  static float level, led_level[NLED];
+  int playing = ps.loaded && !ps.paused;
+  if (!set.leds || !playing) { level = 0; memset(led_level, 0, sizeof led_level); leds_restore(); return; }
+  Uint32 rgb[NLED];
+  if (set.leds == 3 && ps.nch) {
+    // the top bar: a LED a channel, left to right (round again past 8); the triggers: the channels panned to that
+    // side; F1 and F2: the whole song, in white
+    float side[2] = { 0, 0 }, all = 0;
+    for (int c = 0; c < ps.nch; c++) { side[ps.ci[c].pan < 128 ? 0 : 1] += vu[c]; all = vu[c] > all ? vu[c] : all; }
+    float t[NLED];
+    for (int i = 0; i < 8; i++) t[i] = vu[i % ps.nch] * 1.4f;
+    t[LED_F2] = t[LED_F1] = all;
+    t[LED_L1] = t[LED_L2] = side[0] * 1.2f;
+    t[LED_R1] = t[LED_R2] = side[1] * 1.2f;
+    for (int i = 0; i < NLED; i++) {
+      if (t[i] > 1) t[i] = 1;
+      led_level[i] = t[i] > led_level[i] ? t[i] : led_level[i] * .85f;
+      float q = (int)(led_level[i] * 16 + .5f) / 16.f;   // few steps: fewer writes
+      int span = ps.nch < 8 ? ps.nch : 8;
+      rgb[i] = i < 8 ? hue_rgb((float)(i % ps.nch % span) / span, q)
+             : i == LED_F1 || i == LED_F2 ? scale_rgb(0xffffff, q)
+             : hue_rgb(i <= LED_L2 ? 0.55f : 0.0f, q);   // left in blue, right in red
+    }
+  } else {
+    float peak = 0, sum = 0;
+    for (int c = 0; c < ps.nch; c++) { sum += vu[c]; if (vu[c] > peak) peak = vu[c]; }
+    float target = peak * .7f + (ps.nch ? sum / ps.nch : 0) * 1.2f;
+    if (target > 1) target = 1;
+    level = target > level ? target : level * .9f + target * .1f;
+    float q = (int)(level * 24 + .5f) / 24.f;
+    Uint32 c = set.leds == 2 ? hue_rgb(ps.time / 40000.f, q) : scale_rgb(DOT_ACCENT_MUSICDISK, q);   // once round the wheel in 40 s
+    for (int i = 0; i < NLED; i++) rgb[i] = c;
+  }
+  leds_frame(rgb);
 }
 
 int main(int argc, char **argv) {
@@ -925,12 +775,9 @@ int main(int argc, char **argv) {
   snprintf(cache_dir, sizeof cache_dir, "%s/cache", user_dir); mkdir(cache_dir, 0755);
 
   const char *sd = getenv("SDCARD_PATH"); if (!sd || !*sd) sd = "/mnt/SDCARD";
-  src[0].name = "SD card"; snprintf(src[0].root, sizeof src[0].root, "%s/Music", sd); src[0].remote = 0;
-  src[1].name = "scene.org music"; snprintf(src[1].root, sizeof src[1].root, SCENE "/pub/music/"); src[1].remote = 1;
-  src[2].name = "scene.org parties"; snprintf(src[2].root, sizeof src[2].root, SCENE "/pub/parties/"); src[2].remote = 1;
-  src[3].name = "Downloaded"; snprintf(src[3].root, sizeof src[3].root, "%s", cache_dir); src[3].cache = 1;
-  for (int i = 0; i < NSRC; i++) snprintf(src[i].lv[0].path, sizeof src[i].lv[0].path, "%s", src[i].root);
-  mkdir(src[0].root, 0755);
+  snprintf(music_root, sizeof music_root, "%s/Music", sd);
+  mkdir(music_root, 0755);
+  snprintf(lv[0].path, sizeof lv[0].path, "%s", music_root);
 
   if (SDL_Init(SDL_INIT_VIDEO | SDL_INIT_AUDIO | SDL_INIT_GAMECONTROLLER) != 0) { fprintf(stderr, "SDL: %s\n", SDL_GetError()); return 1; }
   SDL_Window *win = SDL_CreateWindow("Musicdisk", 0, 0, 1024, 768, shots_dir ? 0 : SDL_WINDOW_FULLSCREEN);
@@ -938,38 +785,53 @@ int main(int argc, char **argv) {
   if (!ren) { fprintf(stderr, "renderer: %s\n", SDL_GetError()); return 1; }
   SDL_RenderSetLogicalSize(ren, 1024, 768);
   if (gfx_init(ren, pak) != 0) return 1;
+  info_init(pak);
+  settings_load(); settings_apply();
   for (int i = 0; i < SDL_NumJoysticks(); i++) if (SDL_IsGameController(i)) SDL_GameControllerOpen(i);
   if (player_init(!shots_dir) != 0) fprintf(stderr, "audio: %s\n", SDL_GetError());
 
   if (shots_dir) { zip_test = argc > 6 ? argv[6] : NULL; shots(shots_dir, argc > 5 ? argv[5] : ""); SDL_Quit(); return 0; }
 
-  // Start on scene.org; the SD card is read too, and shown instead when there's no connection.
-  migrate_cache();
-  open_level(&src[SRC_SD]); open_level(&src[SRC_CACHE]);
-  cur_src = SRC_MUSIC; probing = 1; open_level(&src[SRC_MUSIC]);
+  open_level();
 
+  if (!shots_dir) {   // the LEDs and the screen go back the way they were however Musicdisk ends
+    leds_start();
+    atexit(restore_hw);
+    signal(SIGTERM, on_signal); signal(SIGINT, on_signal); signal(SIGHUP, on_signal);
+    signal(SIGSEGV, on_signal); signal(SIGABRT, on_signal); signal(SIGBUS, on_signal); signal(SIGFPE, on_signal);
+  }
   srand((unsigned)time(NULL));
   { char p[800]; struct stat st; snprintf(p, sizeof p, "%s/help-seen", user_dir); show_help = stat(p, &st) != 0; }
-  int held = -1; Uint32 repeat_at = 0;
+  int held = -1; Uint32 repeat_at = 0, last_input = SDL_GetTicks();
   while (running) {
     SDL_Event e;
     while (SDL_PollEvent(&e)) {
       if (e.type == SDL_QUIT) running = 0;
       if (e.type == SDL_CONTROLLERBUTTONDOWN) {
         int b = e.cbutton.button;
+        last_input = SDL_GetTicks();
+        if (!screen_is_on()) { screen_power(1); continue; }   // the press that wakes the screen does nothing else
         on_button(b);
         if (b == BTN_UP || b == BTN_DOWN || b == BTN_LEFT || b == BTN_RIGHT) { held = b; repeat_at = SDL_GetTicks() + 400; }
       }
       if (e.type == SDL_CONTROLLERBUTTONUP && e.cbutton.button == held) held = -1;
     }
-    if (held >= 0 && SDL_GetTicks() >= repeat_at) { on_button(held); repeat_at = SDL_GetTicks() + 70; }
-    job_poll();
-    diz_pump();
+    if (held >= 0 && SDL_GetTicks() >= repeat_at) {   // held: again and again (seeking slower than the lists)
+      int seeking = screen == SCR_NOW && (held == BTN_LEFT || held == BTN_RIGHT);
+      on_button(held); repeat_at = SDL_GetTicks() + (seeking ? 300 : 70);
+    }
     player_get(&ps);
-    if (ps.loaded && ps.ended && !job_busy()) {   // the song is over: on to the next one in the folder
+    if (ps.loaded && ps.ended) {   // the song is over: on to the next one in the playlist
       if (pl_i + 1 < pl_n) play_index(pl_i + 1);
-      else if (pl_random) { if (!job_busy()) start_random(pl_src); }
-      else { player_unload(); screen = SCR_BROWSE; }
+      else { player_unload(); screen = SCR_BROWSE; screen_power(1); }
+    }
+    { const struct xmp_module *m = player_module(); if (m) update_vu(m); }
+    lights();
+    int playing = ps.loaded && !ps.paused;
+    if (screen_is_on() && playing && OFF_MS[set.screen_off] && SDL_GetTicks() - last_input > (Uint32)OFF_MS[set.screen_off]) screen_power(0);
+    if (!screen_is_on()) {
+      if (!playing) { screen_power(1); last_input = SDL_GetTicks(); }   // paused or stopped: the screen comes back
+      SDL_Delay(30); continue;   // nothing to draw: the music plays on in the audio thread
     }
     static Uint32 last_tick; Uint32 now_tick = SDL_GetTicks();
     frame_dt = last_tick ? (now_tick - last_tick) / 1000.f : 1 / 60.f; if (frame_dt > .1f) frame_dt = .1f;
