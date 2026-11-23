@@ -2,7 +2,7 @@
 
 Plays MOD, S3M, XM, IT and about 90 other musicdisk formats on the TrimUI Brick (`tg5040`), from the `Music` folder
 on the SD card. Playback is [libxmp](https://github.com/libxmp/libxmp).
-Drawn with [Dot](https://github.com/evolver79/nextui-dotui), the shared look of Musicdisk, Kino and Tuner.
+Drawn with [Dot](https://github.com/evolver79/nextui-dotui), the shared look of Musicdisk, Kino, Tuner and Speed.
 
 <p>
 <img src="docs/screens/now.png" width="49%" alt="Now playing: the time in dot-matrix numbers, a dotted progress bar, a column of dots per channel and the round buttons">
@@ -67,3 +67,8 @@ Debian bullseye container (Docker). `build/build.sh --shots <module>` also draws
 
 Fonts: Doto, Geist and Geist Mono (SIL OFL), from Dot; PxPlus IBM VGA 8x16 by VileR
 ([The Ultimate Oldschool PC Font Pack](https://int10h.org/oldschool-pc-fonts/), CC BY-SA 4.0). libxmp: MIT.
+
+## Made with an AI assistant
+
+This pak was built with the help of an LLM (Claude, by Anthropic): the code, scripts and documentation were written in
+conversation with it, and tested on a real TrimUI Brick.
