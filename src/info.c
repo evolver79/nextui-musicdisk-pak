@@ -143,27 +143,27 @@ void info_draw(const struct xmp_module *m, const char *title) {
   const char *dot = m->type;
   snprintf(right, sizeof right, "%d CH", m->chn);
   dot_header(D, title, right);
-  dot_card(D, 40, 96, 944, 528);
+  dot_card(D, 40, 96, 944, 544);
   // the facts: label over value
   int pat = m->pat, ins = m->ins > 0 ? m->ins : m->smp;
-  static const int xs[5] = { 76, 440, 610, 740, 860 };
+  static const int xs[5] = { 76, 370, 560, 716, 858 };   // SPEED ends by 954: 30 px inside the card
   const char *labels[5] = { "Tracker", "Patterns", "Instr.", "Tempo", "Speed" };
   for (int i = 0; i < 5; i++) {
-    dot_text(D, DOT_LABEL_T, labels[i], xs[i], 122, DOT_LABEL, DOT_LEFT, 0);
+    dot_text(D, DOT_LABEL_T, labels[i], xs[i], 126, DOT_LABEL, DOT_LEFT, 0);
     if (i == 0) snprintf(v, sizeof v, "%s", dot);
     else if (i == 1) snprintf(v, sizeof v, "%d", pat);
     else if (i == 2) snprintf(v, sizeof v, "%d", ins);
     else if (i == 3) snprintf(v, sizeof v, "%d", m->bpm);
     else snprintf(v, sizeof v, "%d", m->spd);
-    dot_text(D, DOT_VALUE, v, xs[i], 156, DOT_TEXT, DOT_LEFT, i == 0 ? 340 : 0);
+    dot_text(D, DOT_VALUE, v, xs[i], 162, DOT_TEXT, DOT_LEFT, i == 0 ? 370 - 76 - 24 : 0);
   }
-  for (int x = 76; x <= 948; x += 18) dot_circle(D, x, 206, 2, DOT_TRACK);
+  for (int x = 76; x <= 948; x += 18) dot_circle(D, x, 212, 2, DOT_TRACK);
   // the text, INFO_PAGE + 1 lines
-  int y0 = 224;
+  int y0 = 230;
   for (int i = 0; i <= INFO_PAGE && top + i < nlines; i++) {
     Line *l = &lines[top + i];
     int y = y0 + i * LINE_H;
-    if (l->heading) { dot_text(D, DOT_LABEL_T, l->s, 76, y + 6, DOT_LABEL, DOT_LEFT, 0); continue; }
+    if (l->heading) { dot_text(D, DOT_LABEL_T, l->s, 76, y - 4, DOT_LABEL, DOT_LEFT, 0); continue; }
     if (!l->s[0] || !vga) continue;
     if (!l->tex) {
       SDL_Surface *s = TTF_RenderUTF8_Solid(vga, l->s, (SDL_Color){ 0xf2, 0xf2, 0xf0, 255 });

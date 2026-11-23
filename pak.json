@@ -11,5 +11,15 @@
   },
   "platforms": [
     "tg5040"
+  ],
+  "screenshots": [
+    "docs/screens/now.png",
+    "docs/screens/browse.png",
+    "docs/screens/pattern.png",
+    "docs/screens/scopes.png",
+    "docs/screens/info.png",
+    "docs/screens/settings.png",
+    "docs/screens/help.png",
+    "docs/screens/demo-1.png"
   ]
 }

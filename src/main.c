@@ -365,10 +365,11 @@ static void draw_pattern(const struct xmp_module *m) {
   dot_header(D, a, b);
   dot_card(D, 40, 96, 944, 528);
   static const int xs[5] = { 76, 196, 386, 576, 766 };
-  dot_text(D, DOT_LABEL_T, "Row", xs[0], 124, DOT_LABEL, DOT_LEFT, 0);
+  dot_text(D, DOT_SMALL, "Row", xs[0], 124, DOT_LABEL, DOT_LEFT, 0);
   for (int i = 0; i < 4 && base + i < ps.nch; i++) {
-    char l[48]; chan_label(m, base + i, l, sizeof l);
-    dot_text(D, DOT_LABEL_T, l, xs[i + 1], 124, player_muted(base + i) ? DOT_DIM : DOT_LABEL, DOT_LEFT, 176);
+    char l[48]; int mu = player_muted(base + i);   // muted: says so, instead of the instrument
+    if (mu) snprintf(l, sizeof l, "%d Muted", base + i + 1); else chan_label(m, base + i, l, sizeof l);
+    dot_text(D, DOT_SMALL, l, xs[i + 1], 124, mu ? DOT_DIM : DOT_LABEL, DOT_LEFT, 172);
   }
   for (int k = -4; k <= 4; k++) {
     int r = ps.row + k, y = 166 + (k + 4) * 50, cur = k == 0;
@@ -398,19 +399,20 @@ static void draw_scopes(const struct xmp_module *m) {
   int page = scope_sel / 8, base = page * 8;
   SDL_Point pts[240];
   int shown = ps.nch - base < 8 ? ps.nch - base : 8, nrows = (shown + 1) / 2;   // the cards share the content area
-  int h = nrows ? (544 - 16 * (nrows - 1)) / nrows : 0, amp = (h - 60) / 2 - 4;
+  int h = nrows ? (544 - 16 * (nrows - 1)) / nrows : 0, amp = (h - 60) / 2 - 16;
   for (int k = 0; k < shown; k++) {
     int c = base + k, x = 40 + (k % 2) * 480, y = 96 + (k / 2) * (h + 16), w = 464;
     int mu = player_muted(c), sel = c == scope_sel;
     if (sel) dot_rect(D, x, y, w, h, DOT_R_ROW, DOT_PAPER, 255); else dot_card(D, x, y, w, h);
     char l[48]; chan_label(m, c, l, sizeof l);
-    dot_text(D, DOT_LABEL_T, l, x + 24, y + 16, sel ? 0x444444 : mu ? DOT_DIM : DOT_LABEL, DOT_LEFT, mu ? 300 : 416);
-    if (mu) dot_text(D, DOT_LABEL_T, "Muted", x + w - 24, y + 16, sel ? 0x444444 : DOT_LABEL, DOT_RIGHT, 0);
-    int cy = y + 52 + (h - 52) / 2, np = 0;
-    for (int i = 0; i <= w - 48 && np < 240; i += 2) {
+    int mw = mu ? dot_text_w(D, DOT_LABEL_T, "Muted") + 16 : 0;
+    dot_text(D, DOT_LABEL_T, l, x + 30, y + 24, sel ? 0x444444 : mu ? DOT_DIM : DOT_LABEL, DOT_LEFT, w - 60 - mw);
+    if (mu) dot_text(D, DOT_LABEL_T, "Muted", x + w - 30, y + 24, sel ? DOT_INK : DOT_TEXT, DOT_RIGHT, 0);
+    int cy = y + 60 + (h - 60) / 2, np = 0;
+    for (int i = 0; i <= w - 60 && np < 240; i += 2) {
       float v = chan_value(m, c, i) * amp * 2.3f;
       v = v > amp ? amp : v < -amp ? -amp : v;
-      pts[np].x = x + 24 + i; pts[np].y = cy - (int)v; np++;
+      pts[np].x = x + 30 + i; pts[np].y = cy - (int)v; np++;
     }
     Uint32 col = sel ? DOT_INK : mu ? DOT_DIM : DOT_TEXT;
     SDL_SetRenderDrawColor(R, col >> 16, col >> 8 & 255, col & 255, 255);
@@ -479,7 +481,7 @@ static void draw_browse(void) {
     char meta[32] = "";
     if (!e->dir) size_str(e->size, meta, sizeof meta);
     int playing = ps.loaded && !e->dir && !strcmp(e->name, now_name);
-    dot_row(D, 40, 96 + i * 94, 944, e->dir ? DOT_I_FOLDER : DOT_I_NOTE, e->title[0] ? e->title : e->name,
+    dot_row(D, 40, 96 + i * (DOT_ROW_H + 12), 944, e->dir ? DOT_I_FOLDER : DOT_I_NOTE, e->title[0] ? e->title : e->name,
             e->artist[0] ? e->artist : NULL, meta, k == l->cursor ? DOT_FOCUS : 0, playing);
   }
   if (pill[0]) dot_pill(D, 40, 572, pill, 1, 0, DOT_LEFT);
@@ -492,26 +494,56 @@ static void draw_browse(void) {
 }
 
 // --- help: what the buttons do -------------------------------------------------------------------------------------
-static void help_panel(int x, const char *label, const DotHint *h, int n) {
-  enum { PITCH = 64 };
-  int y = dot_panel(D, x, 96, 464, dot_panel_h(n * PITCH - 6), label);
+static int help_tab;   // 0 browsing, 1 playing: L1 R1
+
+// Tabs at the top right, the active one lit, between the L1 and R1 keys (as in Kino).
+static void draw_tabs(const char *const *names, int n, int active) {
+  int tx = DOT_W - DOT_MARGIN;
+  tx -= dot_text_w(D, DOT_KEY_WIDE, "R1") + 40; dot_key(D, tx, 25, "R1", 0, 0); tx -= 12;
+  for (int i = n - 1; i >= 0; i--) { tx -= dot_text_w(D, DOT_CHIP_T, names[i]) + 40; dot_chip(D, tx, 28, names[i], i == active ? DOT_ON : 0); tx -= 8; }
+  tx -= 4 + dot_text_w(D, DOT_KEY_WIDE, "L1") + 40; dot_key(D, tx, 25, "L1", 0, 0);
+}
+
+static void help_panel(const DotHint *h, int n) {
+  enum { PITCH = 68 };   // a key cap is 62 high
+  dot_card(D, 40, 96, 944, 30 + n * PITCH - 6 + 30);
+  int y = 96 + 30;
   for (int i = 0; i < n; i++, y += PITCH) {
-    dot_key(D, x + 30, y, h[i].key, 0, 2);
-    dot_text(D, DOT_UI, h[i].text, x + 180, y + (DOT_KEY - dot_line_h(D, DOT_UI)) / 2, DOT_TEXT, DOT_LEFT, 464 - 210);
+    dot_key(D, 70, y, h[i].key, 0, 2);
+    dot_text(D, DOT_UI, h[i].text, 240, y + (DOT_KEY - dot_line_h(D, DOT_UI)) / 2, DOT_TEXT, DOT_LEFT, 954 - 240);
   }
 }
 
 static void draw_help(void) {
   dot_ground(D);
   dot_title(D, "BUTTONS");
-  dot_header(D, NULL, "Musicdisk");
+  static const char *const names[2] = { "Browsing", "Playing" };
+  draw_tabs(names, 2, help_tab);
   static const DotHint browse[] = { { "A", "Open, play" }, { "B", "Back" }, { "L1 R1", "Jump by letter" },
     { "Y", "Shuffle folder" }, { "SELECT", "Settings" }, { "START", "To the player" }, { "MENU", "Quit" } };
   static const DotHint playing[] = { { "A", "Pause" }, { "B", "Browse" }, { "SELECT", "Next screen" },
     { "L1 R1", "Previous, next" }, { "<>", "Skip 10 s, effect" }, { "X Y", "Mute, solo" }, { "START", "Screen off" } };
-  help_panel(40, "Browse", browse, 7);
-  help_panel(520, "Playing", playing, 7);
-  dock4("A", "Got it", NULL, NULL, NULL, NULL, NULL, NULL);
+  if (help_tab) help_panel(playing, 7); else help_panel(browse, 7);
+  dock4("A", "Got it", "L1 R1", help_tab ? "Browsing" : "Playing", NULL, NULL, NULL, NULL);
+}
+
+// Text wrapped at spaces into lines of at most w px, lh apart; at most max lines (the last cut with "…").
+static void wrap_text(int st, const char *s, int x, int y, int w, int lh, Uint32 col, int max) {
+  char line[256];
+  for (int n = 0; *s && n < max; n++, y += lh) {
+    size_t take = strlen(s), fit = 0;
+    if (n + 1 < max && dot_text_w(D, st, s) > w) {
+      for (size_t k = 1; k <= take; k++) if (s[k] == ' ' || !s[k]) {
+        snprintf(line, sizeof line, "%.*s", (int)k, s);
+        if (dot_text_w(D, st, line) > w) break;
+        fit = k;
+      }
+      if (fit) take = fit;
+    }
+    snprintf(line, sizeof line, "%.*s", (int)take, s);
+    dot_text(D, st, line, x, y, col, DOT_LEFT, w);
+    s += take; while (*s == ' ') s++;
+  }
 }
 
 static void draw_settings(void) {
@@ -521,7 +553,7 @@ static void draw_settings(void) {
   enum { P = DOT_OPT_PITCH };
   int f[O_N]; for (int i = 0; i < O_N; i++) f[i] = i == opt_sel ? DOT_FOCUS : 0;
   int y = dot_panel(D, 40, 96, 464, dot_panel_h(3 * P), "Sound");
-  dot_opt_slider(D, 70, y, 404, "Stereo separation", set.separation / 100.f, f[O_SEP]);
+  dot_opt_slider(D, 70, y, 404, "Separation", set.separation / 100.f, f[O_SEP]);
   dot_opt(D, 70, y + P, 404, "Interpolation", INTERP_NAMES[set.interp], f[O_INTERP]);
   dot_opt_toggle(D, 70, y + 2 * P, 404, "Amiga filter", set.filter, f[O_FILTER]);
   y = dot_panel(D, 520, 96, 464, dot_panel_h(3 * P), "Brick");
@@ -538,9 +570,10 @@ static void draw_settings(void) {
   static const char *TITLE[O_N] = { "Stereo separation", "Interpolation", "Amiga filter", "Lights", "Screen off", "Buttons" };
   char t[80];
   if (opt_sel == O_SEP) snprintf(t, sizeof t, "%s · %d %%", TITLE[opt_sel], set.separation); else snprintf(t, sizeof t, "%s", TITLE[opt_sel]);
-  dot_card(D, 40, 374, 944, 136);
-  dot_text(D, DOT_UI, t, 76, 404, DOT_TEXT, DOT_LEFT, 872);
-  dot_text(D, DOT_BODY_S, HELP[opt_sel], 76, 448, DOT_LABEL, DOT_LEFT, 872);
+  int hy = 96 + dot_panel_h(3 * P) + DOT_GAP;   // under the two panels
+  dot_card(D, 40, hy, 944, 30 + 36 + 12 + 2 * 36 + 30);
+  dot_text(D, DOT_UI, t, 70, hy + 30, DOT_TEXT, DOT_LEFT, 884);
+  wrap_text(DOT_BODY_S, HELP[opt_sel], 70, hy + 78, 884, 36, DOT_LABEL, 2);
   dock4("<>", "Change", "B", "Back", NULL, NULL, NULL, NULL);
 }
 
@@ -559,7 +592,7 @@ static void settings_button(int b) {
     case O_FILTER: set.filter = !set.filter; break;
     case O_LEDS: set.leds = (set.leds + 4 + d) % 4; break;
     case O_SCREEN: set.screen_off = (set.screen_off + 5 + d) % 5; break;
-    case O_BUTTONS: if (b == BTN_A) { show_settings = 0; show_help = 1; } return;
+    case O_BUTTONS: if (b == BTN_A) { show_settings = 0; show_help = 1; help_tab = 0; } return;
   }
   settings_apply(); settings_save();
 }
@@ -626,7 +659,11 @@ static void seek(int ms) {
 }
 
 static void on_button(int b) {
-  if (show_help) { if (b == BTN_MENU) running = 0; help_seen(); return; }
+  if (show_help) {
+    if (b == BTN_L1 || b == BTN_R1 || b == BTN_LEFT || b == BTN_RIGHT) { help_tab = !help_tab; return; }
+    if (b == BTN_MENU) running = 0;
+    help_seen(); return;
+  }
   if (show_settings) { settings_button(b); return; }
   if (b == BTN_MENU) { running = 0; return; }
   if (screen == SCR_BROWSE) {
@@ -684,7 +721,8 @@ static const char *zip_test;
 static void shots(const char *dir, const char *module) {
   open_level();
   draw(); save_shot(dir, "browse");
-  show_help = 1; draw(); save_shot(dir, "help"); show_help = 0;
+  show_help = 1; help_tab = 0; draw(); save_shot(dir, "help");
+  help_tab = 1; draw(); save_shot(dir, "help-playing"); help_tab = 0; show_help = 0;
   show_settings = 1; draw(); save_shot(dir, "settings"); show_settings = 0;
   // a zip with two songs becomes two playlist items
   if (zip_test) {
@@ -702,10 +740,16 @@ static void shots(const char *dir, const char *module) {
   player_pump(900);
   player_get(&ps);
   for (int i = 0; i < 12; i++) update_vu(player_module());
+  screen = SCR_BROWSE; draw(); save_shot(dir, "browse-playing");
   screen = SCR_NOW; draw(); save_shot(dir, "now");
   flash(1, 1); draw(); save_shot(dir, "now-seek"); flash_until = 0;
   screen = SCR_PATTERN; draw(); save_shot(dir, "pattern");
   screen = SCR_SCOPES; scope_sel = 2; draw(); save_shot(dir, "scopes");
+  player_mute(1, 1);   // a muted channel: does it read as muted?
+  screen = SCR_NOW; draw(); save_shot(dir, "now-muted");
+  screen = SCR_PATTERN; draw(); save_shot(dir, "pattern-muted");
+  screen = SCR_SCOPES; scope_sel = 1; draw(); save_shot(dir, "scopes-muted"); scope_sel = 2;
+  player_mute(1, 0);
   screen = SCR_INFO; draw(); save_shot(dir, "info");
   info_scroll(INFO_PAGE); draw(); save_shot(dir, "info-2"); info_scroll(-1000);
   screen = SCR_DEMO;

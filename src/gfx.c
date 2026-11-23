@@ -4,12 +4,13 @@
 SDL_Renderer *R;
 Dot *D;
 const SDL_Color C_BG = { 0, 0, 0, 255 }, C_INK = { 0xf2, 0xf2, 0xf0, 255 }, C_RULE = { 0x44, 0x44, 0x44, 255 },
-                C_MUTE = { 0x8d, 0x8d, 0x8a, 255 }, C_ACC = { 0xff, 0x3b, 0x30, 255 };
+                C_MUTE = { 0x8d, 0x8d, 0x8a, 255 }, C_ACC = { 0xff, 0x4f, 0x9a, 255 };
 
 int gfx_init(SDL_Renderer *ren, const char *pak_dir) {
   R = ren;
   char p[800]; snprintf(p, sizeof p, "%s/fonts", pak_dir);
   if (!(D = dot_init(ren, p, DOT_ACCENT_MUSICDISK))) { fprintf(stderr, "fonts in %s: %s\n", p, SDL_GetError()); return -1; }
+  static const DotTheme t = DOT_THEME_MUSICDISK; dot_set_theme(D, &t);   // rose ground, magenta accent
   return 0;
 }
 
