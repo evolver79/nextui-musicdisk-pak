@@ -2,7 +2,7 @@
   "name": "Musicdisk",
   "version": "v0.1.0",
   "type": "TOOL",
-  "description": "MOD, S3M, XM and IT player in the Dot look: plays your modules from the SD card, with the pattern, real per-channel scopes and VU.",
+  "description": "MOD, S3M, XM and IT player in the Dot look for the TrimUI Brick and Smart Pro: plays your modules from the SD card, with the pattern, real per-channel scopes and VU.",
   "author": "evolver79",
   "repo_url": "https://github.com/evolver79/nextui-musicdisk-pak",
   "release_filename": "Musicdisk.pak.zip",

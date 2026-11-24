@@ -24,7 +24,7 @@ static const char *CP437_HIGH[129] = { "⌂",
 
 // --- the lines: headings and text, each text line drawn once into a texture ---------------------------------------------
 #define COLS 53          // 16 px a character at 32 px: what fits beside the scroll bar
-#define LINE_H 32
+#define LINE_H INFO_LINE_H
 #define MAXLINES 1200
 typedef struct { char *s; int heading; SDL_Texture *tex; int w; } Line;
 static Line lines[MAXLINES];
@@ -143,10 +143,12 @@ void info_draw(const struct xmp_module *m, const char *title) {
   const char *dot = m->type;
   snprintf(right, sizeof right, "%d CH", m->chn);
   dot_header(D, title, right);
-  dot_card(D, 40, 96, 944, 544);
+  dot_card(D, DOT_MARGIN, 96, DOT_CONTENT_W, DOT_CONTENT_BOTTOM - 96);
   // the facts: label over value
   int pat = m->pat, ins = m->ins > 0 ? m->ins : m->smp;
-  static const int xs[5] = { 76, 370, 560, 716, 858 };   // SPEED ends by 954: 30 px inside the card
+  // the columns spread over the card's width: 76, 370, 560, 716, 858 on the Brick (SPEED ends by 954, 30 px inside)
+  static const int bx[5] = { 76, 370, 560, 716, 858 };
+  int xs[5]; for (int i = 0; i < 5; i++) xs[i] = 76 + (bx[i] - 76) * (DOT_CONTENT_W - 72) / 872;
   const char *labels[5] = { "Tracker", "Patterns", "Instr.", "Tempo", "Speed" };
   for (int i = 0; i < 5; i++) {
     dot_text(D, DOT_LABEL_T, labels[i], xs[i], 126, DOT_LABEL, DOT_LEFT, 0);
@@ -155,9 +157,9 @@ void info_draw(const struct xmp_module *m, const char *title) {
     else if (i == 2) snprintf(v, sizeof v, "%d", ins);
     else if (i == 3) snprintf(v, sizeof v, "%d", m->bpm);
     else snprintf(v, sizeof v, "%d", m->spd);
-    dot_text(D, DOT_VALUE, v, xs[i], 162, DOT_TEXT, DOT_LEFT, i == 0 ? 370 - 76 - 24 : 0);
+    dot_text(D, DOT_VALUE, v, xs[i], 162, DOT_TEXT, DOT_LEFT, i == 0 ? xs[1] - 76 - 24 : 0);
   }
-  for (int x = 76; x <= 948; x += 18) dot_circle(D, x, 212, 2, DOT_TRACK);
+  for (int x = 76; x <= DOT_W - DOT_MARGIN - 36; x += 18) dot_circle(D, x, 212, 2, DOT_TRACK);
   // the text, INFO_PAGE + 1 lines
   int y0 = 230;
   for (int i = 0; i <= INFO_PAGE && top + i < nlines; i++) {
@@ -177,7 +179,7 @@ void info_draw(const struct xmp_module *m, const char *title) {
   if (nlines > INFO_PAGE + 1) {
     int th = (INFO_PAGE + 1) * LINE_H, bh = th * (INFO_PAGE + 1) / nlines; if (bh < 30) bh = 30;
     int max = nlines - INFO_PAGE - 1, by = y0 + (th - bh) * top / (max ? max : 1);
-    dot_rect(D, 950, y0, 6, th, 3, DOT_TRACK, 255);
-    dot_rect(D, 950, by, 6, bh, 3, DOT_TEXT, 255);
+    dot_rect(D, DOT_W - 74, y0, 6, th, 3, DOT_TRACK, 255);   // 950 on the Brick
+    dot_rect(D, DOT_W - 74, by, 6, bh, 3, DOT_TEXT, 255);
   }
 }

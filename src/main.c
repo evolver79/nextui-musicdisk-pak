@@ -28,7 +28,12 @@ enum { BTN_A = SDL_CONTROLLER_BUTTON_B, BTN_B = SDL_CONTROLLER_BUTTON_A, BTN_X =
        BTN_LEFT = SDL_CONTROLLER_BUTTON_DPAD_LEFT, BTN_RIGHT = SDL_CONTROLLER_BUTTON_DPAD_RIGHT };
 
 enum { SCR_NOW, SCR_DEMO, SCR_PATTERN, SCR_SCOPES, SCR_INFO, SCR_BROWSE };
-#define ROWS 5
+// The screen is the device's own (Brick 1024x768, Smart Pro 1280x720: dot_screen_detect in main); these follow it.
+#define ROWS ((DOT_CONTENT_BOTTOM - 96 + 12) / (DOT_ROW_H + 12))   // browse rows: Brick 5, Smart Pro 4
+#define CW DOT_CONTENT_W              // a full-width card: 944 / 1200
+#define RIGHT (DOT_W - DOT_MARGIN)    // the content's right edge: 984 / 1240
+#define CB (DOT_DOCK_Y - 40)          // the bottom of the tall cards: 624 / 576
+#define DW (DOT_W - 1024)             // how much wider than the Brick: 0 / 256
 
 static int screen = SCR_BROWSE, running = 1;
 static char user_dir[700], cache_dir[760];
@@ -44,13 +49,12 @@ static int show_help;   // the buttons, shown on first start and on SELECT in Br
 static void toast(const char *m) { snprintf(toast_msg, sizeof toast_msg, "%s", m); toast_until = SDL_GetTicks() + 2600; }
 
 // --- settings: SELECT in Browse. Kept in <user data>/settings.txt as key=value lines. ---------------------------------
-static struct { int separation, interp, filter, leds, screen_off; } set = { 70, 2, 1, 3, 2 };   // leds: 0 off, 1 red, 2 rainbow, 3 channels
-static const char *LED_NAMES[] = { "Off", "Red", "Rainbow", "Channels" };
+static struct { int separation, interp, filter, screen_off; } set = { 70, 2, 1, 2 };
 static const char *INTERP_NAMES[] = { "Nearest · Amiga", "Linear", "Spline" };
 static const int INTERP_XMP[] = { XMP_INTERP_NEAREST, XMP_INTERP_LINEAR, XMP_INTERP_SPLINE };
 static const char *OFF_NAMES[] = { "Never", "After 30 s", "After 1 min", "After 2 min", "After 5 min" };
 static const int OFF_MS[] = { 0, 30000, 60000, 120000, 300000 };
-enum { O_SEP, O_INTERP, O_FILTER, O_LEDS, O_SCREEN, O_BUTTONS, O_N };
+enum { O_SEP, O_INTERP, O_FILTER, O_SCREEN, O_BUTTONS, O_N };
 static int show_settings, opt_sel;
 
 static void settings_apply(void) { player_sound(set.separation, INTERP_XMP[set.interp], set.filter); }
@@ -63,7 +67,6 @@ static void settings_load(void) {
     if (!strcmp(k, "separation") && v >= 0 && v <= 100) set.separation = v;
     else if (!strcmp(k, "interpolation") && v >= 0 && v < 3) set.interp = v;
     else if (!strcmp(k, "amiga_filter")) set.filter = !!v;
-    else if (!strcmp(k, "leds") && v >= 0 && v < 4) set.leds = v;
     else if (!strcmp(k, "screen_off") && v >= 0 && v < 5) set.screen_off = v;
   }
   fclose(f);
@@ -72,7 +75,7 @@ static void settings_load(void) {
 static void settings_save(void) {
   char p[800]; snprintf(p, sizeof p, "%s/settings.txt", user_dir);
   FILE *f = fopen(p, "w"); if (!f) return;
-  fprintf(f, "separation=%d\ninterpolation=%d\namiga_filter=%d\nleds=%d\nscreen_off=%d\n", set.separation, set.interp, set.filter, set.leds, set.screen_off);
+  fprintf(f, "separation=%d\ninterpolation=%d\namiga_filter=%d\nscreen_off=%d\n", set.separation, set.interp, set.filter, set.screen_off);
   fclose(f);
 }
 
@@ -303,9 +306,9 @@ static void player_dock(const char *k3, const char *t3) {
 }
 
 static void message_card(const char *title, const char *body) {
-  dot_card(D, 40, 96, 944, 170);
-  dot_text(D, DOT_TITLE, title, 76, 130, DOT_TEXT, DOT_LEFT, 872);
-  if (body) dot_text(D, DOT_BODY_S, body, 76, 184, DOT_LABEL, DOT_LEFT, 872);
+  dot_card(D, 40, 96, CW, 170);
+  dot_text(D, DOT_TITLE, title, 76, 130, DOT_TEXT, DOT_LEFT, CW - 72);
+  if (body) dot_text(D, DOT_BODY_S, body, 76, 184, DOT_LABEL, DOT_LEFT, CW - 72);
 }
 
 static void draw_nothing(void) {
@@ -321,37 +324,39 @@ static void draw_now(const struct xmp_module *m) {
   if (pl_n > 1) snprintf(b, sizeof b, "%s · %d of %d", pl_shuffled ? "Shuffle" : "Now playing", pl_i + 1, pl_n);
   else snprintf(b, sizeof b, "Now playing");
   dot_header(D, b, a);
-  dot_card(D, 40, 96, 944, 528);
+  // the lower part (channel dots, round buttons) sits dy higher on a shorter screen, with 5 rows of dots, not 6
+  int dy = 624 - CB;
+  dot_card(D, 40, 96, CW, CB - 96);
   dot_adot(D, 76, 133, dot_accent(D));
   dot_text(D, DOT_LABEL_T, ps.paused ? "Paused" : "Playing", 104, 130, DOT_TEXT, DOT_LEFT, 0);
   char title[100]; song_title(m, title, sizeof title);
-  dot_text(D, DOT_TITLE, title, 76, 170, DOT_TEXT, DOT_LEFT, 872);
+  dot_text(D, DOT_TITLE, title, 76, 170, DOT_TEXT, DOT_LEFT, CW - 72);
   if (now_artist[0]) snprintf(b, sizeof b, "%s · %s", now_artist, now_name);
   else snprintf(b, sizeof b, "%s · %s", now_name, m->type);
-  dot_text(D, DOT_BODY_S, b, 76, 220, DOT_LABEL, DOT_LEFT, 872);
+  dot_text(D, DOT_BODY_S, b, 76, 220, DOT_LABEL, DOT_LEFT, CW - 72);
   clock_str(ps.time, t);
   int tw = dot_time(D, DOT_DISPLAY_XL, t, 74, 278, ps.paused ? DOT_LABEL : DOT_TEXT, DOT_LEFT);
   clock_str(ps.total, t); snprintf(a, sizeof a, "/ %s", t);
   dot_text(D, DOT_LABEL_T, a, 74 + tw + 30, 300, DOT_LABEL, DOT_LEFT, 0);
-  dot_progress(D, 76, 396, 872, ps.total > 0 ? (float)ps.time / ps.total : 0, 0);
+  dot_progress(D, 76, 396, CW - 72, ps.total > 0 ? (float)ps.time / ps.total : 0, 0);
   // a column of dots per channel, lit from the bottom by its loudness, left of the round buttons
-  int n = ps.nch, rows = 6, pitch = n ? 544 / n : 40;   // the last dot ends by x 620: 40 px clear of the prev button
+  int n = ps.nch, rows = dy ? 5 : 6, pitch = n ? (544 + DW) / n : 40;   // the last dot ends 40 px clear of the prev button (x 620 on the Brick)
   if (pitch > 40) pitch = 40;
   int r = pitch >= 20 ? 7 : pitch / 2 - 2 > 2 ? pitch / 2 - 2 : 2;
   for (int c = 0; c < n; c++) {
     int x = 76 + r + c * pitch, lit = (int)(vu[c] * rows * 1.6f + .5f), mu = player_muted(c);
     if (lit > rows) lit = rows;
     for (int k = 0; k < rows; k++)
-      dot_circle(D, x, 562 - k * 20, r, k < lit ? (mu ? DOT_DIM : DOT_TEXT) : DOT_TRACK);
-    if (n <= 16) { snprintf(a, sizeof a, "%d", c + 1); dot_text(D, DOT_VALUE, a, x, 584, mu ? DOT_DIM : DOT_LABEL, DOT_CENTER, 0); }
+      dot_circle(D, x, 562 - dy - k * 20, r, k < lit ? (mu ? DOT_DIM : DOT_TEXT) : DOT_TRACK);
+    if (n <= 16) { snprintf(a, sizeof a, "%d", c + 1); dot_text(D, DOT_VALUE, a, x, 584 - dy, mu ? DOT_DIM : DOT_LABEL, DOT_CENTER, 0); }
   }
   int has_prev = pl_i > 0, has_next = pl_i + 1 < pl_n;
   int lit = SDL_GetTicks() < flash_until ? flash_dir : 0;   // a 10 s skip shows as rewind / forward
-  dot_round(D, 698, 520, lit < 0 && flash_seek ? DOT_I_BACK : DOT_I_PREV, 0, lit < 0 ? DOT_FOCUS | DOT_ON : has_prev ? 0 : DOT_OFF);
-  dot_round(D, 808, 520, ps.paused ? DOT_I_PLAY : DOT_I_PAUSE, 1, lit ? 0 : DOT_FOCUS);
-  dot_round(D, 918, 520, lit > 0 && flash_seek ? DOT_I_FWD : DOT_I_NEXT, 0, lit > 0 ? DOT_FOCUS | DOT_ON : has_next ? 0 : DOT_OFF);
-  dot_text(D, DOT_LABEL_T, "L1", 698, 572, has_prev ? DOT_LABEL : DOT_DIM, DOT_CENTER, 0);   // the buttons that do it
-  dot_text(D, DOT_LABEL_T, "R1", 918, 572, has_next ? DOT_LABEL : DOT_DIM, DOT_CENTER, 0);
+  dot_round(D, 698 + DW, 520 - dy, lit < 0 && flash_seek ? DOT_I_BACK : DOT_I_PREV, 0, lit < 0 ? DOT_FOCUS | DOT_ON : has_prev ? 0 : DOT_OFF);
+  dot_round(D, 808 + DW, 520 - dy, ps.paused ? DOT_I_PLAY : DOT_I_PAUSE, 1, lit ? 0 : DOT_FOCUS);
+  dot_round(D, 918 + DW, 520 - dy, lit > 0 && flash_seek ? DOT_I_FWD : DOT_I_NEXT, 0, lit > 0 ? DOT_FOCUS | DOT_ON : has_next ? 0 : DOT_OFF);
+  dot_text(D, DOT_LABEL_T, "L1", 698 + DW, 572 - dy, has_prev ? DOT_LABEL : DOT_DIM, DOT_CENTER, 0);   // the buttons that do it
+  dot_text(D, DOT_LABEL_T, "R1", 918 + DW, 572 - dy, has_next ? DOT_LABEL : DOT_DIM, DOT_CENTER, 0);
   player_dock("<>", "10 s");   // L1 R1 for the song: the round buttons above say it, and the buttons screen
 }
 
@@ -363,17 +368,20 @@ static void draw_pattern(const struct xmp_module *m) {
   int base = pat_page * 4;
   if (pages > 1) { char c[96]; snprintf(c, sizeof c, "%s · ch %d-%d of %d", a, base + 1, base + 4 < ps.nch ? base + 4 : ps.nch, ps.nch); snprintf(a, sizeof a, "%s", c); }
   dot_header(D, a, b);
-  dot_card(D, 40, 96, 944, 528);
-  static const int xs[5] = { 76, 196, 386, 576, 766 };
+  dot_card(D, 40, 96, CW, CB - 96);
+  // the rows either side of the current one: 4 on the Brick (9 rows to 614), 3 on the Smart Pro; the four channel
+  // columns share the width (190 apart on the Brick)
+  int half = (CB - 10 - 214) / 100, cp = (CW - 190 + 6) / 4;
+  const int xs[5] = { 76, 196, 196 + cp, 196 + 2 * cp, 196 + 3 * cp };
   dot_text(D, DOT_SMALL, "Row", xs[0], 124, DOT_LABEL, DOT_LEFT, 0);
   for (int i = 0; i < 4 && base + i < ps.nch; i++) {
     char l[48]; int mu = player_muted(base + i);   // muted: says so, instead of the instrument
     if (mu) snprintf(l, sizeof l, "%d Muted", base + i + 1); else chan_label(m, base + i, l, sizeof l);
-    dot_text(D, DOT_SMALL, l, xs[i + 1], 124, mu ? DOT_DIM : DOT_LABEL, DOT_LEFT, 172);
+    dot_text(D, DOT_SMALL, l, xs[i + 1], 124, mu ? DOT_DIM : DOT_LABEL, DOT_LEFT, cp - 18);
   }
-  for (int k = -4; k <= 4; k++) {
-    int r = ps.row + k, y = 166 + (k + 4) * 50, cur = k == 0;
-    if (cur) dot_rect(D, 56, y, 912, 48, 22, DOT_PAPER, 255);
+  for (int k = -half; k <= half; k++) {
+    int r = ps.row + k, y = 166 + (k + half) * 50, cur = k == 0;
+    if (cur) dot_rect(D, 56, y, CW - 32, 48, 22, DOT_PAPER, 255);
     if (r < 0 || r >= ps.num_rows) continue;
     snprintf(a, sizeof a, "%02d", r);
     int ty = y + (48 - dot_line_h(D, DOT_VALUE_L)) / 2;
@@ -397,11 +405,12 @@ static void draw_scopes(const struct xmp_module *m) {
   clock_str(ps.time, t);
   dot_header(D, title, t);
   int page = scope_sel / 8, base = page * 8;
-  SDL_Point pts[240];
+  SDL_Point pts[400];
   int shown = ps.nch - base < 8 ? ps.nch - base : 8, nrows = (shown + 1) / 2;   // the cards share the content area
-  int h = nrows ? (544 - 16 * (nrows - 1)) / nrows : 0, amp = (h - 60) / 2 - 16;
+  int area = DOT_CONTENT_BOTTOM - 96;   // 544 / 496
+  int h = nrows ? (area - 16 * (nrows - 1)) / nrows : 0, amp = (h - 60) / 2 - 16;
   for (int k = 0; k < shown; k++) {
-    int c = base + k, x = 40 + (k % 2) * 480, y = 96 + (k / 2) * (h + 16), w = 464;
+    int w = (CW - 16) / 2, c = base + k, x = 40 + (k % 2) * (w + 16), y = 96 + (k / 2) * (h + 16);
     int mu = player_muted(c), sel = c == scope_sel;
     if (sel) dot_rect(D, x, y, w, h, DOT_R_ROW, DOT_PAPER, 255); else dot_card(D, x, y, w, h);
     char l[48]; chan_label(m, c, l, sizeof l);
@@ -409,7 +418,7 @@ static void draw_scopes(const struct xmp_module *m) {
     dot_text(D, DOT_LABEL_T, l, x + 30, y + 24, sel ? 0x444444 : mu ? DOT_DIM : DOT_LABEL, DOT_LEFT, w - 60 - mw);
     if (mu) dot_text(D, DOT_LABEL_T, "Muted", x + w - 30, y + 24, sel ? DOT_INK : DOT_TEXT, DOT_RIGHT, 0);
     int cy = y + 60 + (h - 60) / 2, np = 0;
-    for (int i = 0; i <= w - 60 && np < 240; i += 2) {
+    for (int i = 0; i <= w - 60 && np < 400; i += 2) {
       float v = chan_value(m, c, i) * amp * 2.3f;
       v = v > amp ? amp : v < -amp ? -amp : v;
       pts[np].x = x + 30 + i; pts[np].y = cy - (int)v; np++;
@@ -435,12 +444,12 @@ static void draw_demo(const struct xmp_module *m) {
   int bw = dot_text_w(D, DOT_PILL_MONO, b) + 48;
   char cut[110]; snprintf(cut, sizeof cut, "%s", title);   // shortened with "…" to leave room for the right pill
   size_t len = strlen(cut);
-  while (len > 1 && dot_text_w(D, DOT_UI, cut) + 76 > 944 - bw - 24) {
+  while (len > 1 && dot_text_w(D, DOT_UI, cut) + 76 > CW - bw - 24) {
     do len--; while (len > 1 && ((unsigned char)title[len] & 0xc0) == 0x80);   // whole UTF-8 characters
     snprintf(cut, sizeof cut, "%.*s…", (int)len, title);
   }
   dot_pill(D, 40, 36, cut, 1, 0, DOT_LEFT);
-  dot_pill(D, 984, 36, b, 0, 1, DOT_RIGHT);
+  dot_pill(D, RIGHT, 36, b, 0, 1, DOT_RIGHT);
 }
 
 // The crumb: "Music", then the last two folders under it.
@@ -481,10 +490,10 @@ static void draw_browse(void) {
     char meta[32] = "";
     if (!e->dir) size_str(e->size, meta, sizeof meta);
     int playing = ps.loaded && !e->dir && !strcmp(e->name, now_name);
-    dot_row(D, 40, 96 + i * (DOT_ROW_H + 12), 944, e->dir ? DOT_I_FOLDER : DOT_I_NOTE, e->title[0] ? e->title : e->name,
+    dot_row(D, 40, 96 + i * (DOT_ROW_H + 12), CW, e->dir ? DOT_I_FOLDER : DOT_I_NOTE, e->title[0] ? e->title : e->name,
             e->artist[0] ? e->artist : NULL, meta, k == l->cursor ? DOT_FOCUS : 0, playing);
   }
-  if (pill[0]) dot_pill(D, 40, 572, pill, 1, 0, DOT_LEFT);
+  if (pill[0]) dot_pill(D, 40, DOT_DOCK_Y - 92, pill, 1, 0, DOT_LEFT);   // 572 on the Brick
 
   const char *ta = NULL;
   if (failed || !l->list.n) ta = "Try again";
@@ -504,13 +513,15 @@ static void draw_tabs(const char *const *names, int n, int active) {
   tx -= 4 + dot_text_w(D, DOT_KEY_WIDE, "L1") + 40; dot_key(D, tx, 25, "L1", 0, 0);
 }
 
+// One column of keys on the Brick; two side by side where one doesn't fit the height (the Smart Pro).
 static void help_panel(const DotHint *h, int n) {
   enum { PITCH = 68 };   // a key cap is 62 high
-  dot_card(D, 40, 96, 944, 30 + n * PITCH - 6 + 30);
-  int y = 96 + 30;
-  for (int i = 0; i < n; i++, y += PITCH) {
-    dot_key(D, 70, y, h[i].key, 0, 2);
-    dot_text(D, DOT_UI, h[i].text, 240, y + (DOT_KEY - dot_line_h(D, DOT_UI)) / 2, DOT_TEXT, DOT_LEFT, 954 - 240);
+  int cols = 30 + n * PITCH - 6 + 30 > CB + 2 - 96 ? 2 : 1, per = (n + cols - 1) / cols, colw = CW / cols;
+  dot_card(D, 40, 96, CW, 30 + per * PITCH - 6 + 30);
+  for (int i = 0; i < n; i++) {
+    int x = 70 + (i / per) * colw, y = 96 + 30 + (i % per) * PITCH;
+    dot_key(D, x, y, h[i].key, 0, 2);
+    dot_text(D, DOT_UI, h[i].text, x + 170, y + (DOT_KEY - dot_line_h(D, DOT_UI)) / 2, DOT_TEXT, DOT_LEFT, 40 + (i / per + 1) * colw - 30 - (x + 170));
   }
 }
 
@@ -552,28 +563,27 @@ static void draw_settings(void) {
   dot_header(D, NULL, "Musicdisk");
   enum { P = DOT_OPT_PITCH };
   int f[O_N]; for (int i = 0; i < O_N; i++) f[i] = i == opt_sel ? DOT_FOCUS : 0;
-  int y = dot_panel(D, 40, 96, 464, dot_panel_h(3 * P), "Sound");
-  dot_opt_slider(D, 70, y, 404, "Separation", set.separation / 100.f, f[O_SEP]);
-  dot_opt(D, 70, y + P, 404, "Interpolation", INTERP_NAMES[set.interp], f[O_INTERP]);
-  dot_opt_toggle(D, 70, y + 2 * P, 404, "Amiga filter", set.filter, f[O_FILTER]);
-  y = dot_panel(D, 520, 96, 464, dot_panel_h(3 * P), "Brick");
-  dot_opt(D, 550, y, 404, "Lights", LED_NAMES[set.leds], f[O_LEDS]);
-  dot_opt(D, 550, y + P, 404, "Screen off", OFF_NAMES[set.screen_off], f[O_SCREEN]);
-  dot_opt(D, 550, y + 2 * P, 404, "Buttons", "", f[O_BUTTONS]);
+  int pw = (CW - DOT_GAP) / 2, x2 = 40 + pw + DOT_GAP, ow = pw - 60;   // two panels: 464 wide on the Brick
+  int y = dot_panel(D, 40, 96, pw, dot_panel_h(3 * P), "Sound");
+  dot_opt_slider(D, 70, y, ow, "Separation", set.separation / 100.f, f[O_SEP]);
+  dot_opt(D, 70, y + P, ow, "Interpolation", INTERP_NAMES[set.interp], f[O_INTERP]);
+  dot_opt_toggle(D, 70, y + 2 * P, ow, "Amiga filter", set.filter, f[O_FILTER]);
+  y = dot_panel(D, x2, 96, pw, dot_panel_h(3 * P), DW ? "Device" : "Brick");
+  dot_opt(D, x2 + 30, y, ow, "Screen off", OFF_NAMES[set.screen_off], f[O_SCREEN]);
+  dot_opt(D, x2 + 30, y + P, ow, "Buttons", "", f[O_BUTTONS]);
   static const char *HELP[O_N] = {
     "Amiga songs put each channel hard left or right; less is kinder on headphones.",
     "Nearest gives the crunchy Amiga sound. Spline is the smoothest.",
     "The Amiga's low-pass filter, switched on and off by the songs themselves.",
-    "Pulse with the music: in red, in colours that drift through the song, or a colour for each channel.",
     "While a song plays and no button is pressed. START: off now. Any button wakes it.",
     "What every button does: press A." };
-  static const char *TITLE[O_N] = { "Stereo separation", "Interpolation", "Amiga filter", "Lights", "Screen off", "Buttons" };
+  static const char *TITLE[O_N] = { "Stereo separation", "Interpolation", "Amiga filter", "Screen off", "Buttons" };
   char t[80];
   if (opt_sel == O_SEP) snprintf(t, sizeof t, "%s · %d %%", TITLE[opt_sel], set.separation); else snprintf(t, sizeof t, "%s", TITLE[opt_sel]);
   int hy = 96 + dot_panel_h(3 * P) + DOT_GAP;   // under the two panels
-  dot_card(D, 40, hy, 944, 30 + 36 + 12 + 2 * 36 + 30);
-  dot_text(D, DOT_UI, t, 70, hy + 30, DOT_TEXT, DOT_LEFT, 884);
-  wrap_text(DOT_BODY_S, HELP[opt_sel], 70, hy + 78, 884, 36, DOT_LABEL, 2);
+  dot_card(D, 40, hy, CW, 30 + 36 + 12 + 2 * 36 + 30);
+  dot_text(D, DOT_UI, t, 70, hy + 30, DOT_TEXT, DOT_LEFT, CW - 60);
+  wrap_text(DOT_BODY_S, HELP[opt_sel], 70, hy + 78, CW - 60, 36, DOT_LABEL, 2);
   dock4("<>", "Change", "B", "Back", NULL, NULL, NULL, NULL);
 }
 
@@ -590,7 +600,6 @@ static void settings_button(int b) {
     case O_SEP: set.separation += d * 10; if (set.separation < 0) set.separation = 0; if (set.separation > 100) set.separation = 100; break;
     case O_INTERP: set.interp = (set.interp + 3 + d) % 3; break;
     case O_FILTER: set.filter = !set.filter; break;
-    case O_LEDS: set.leds = (set.leds + 4 + d) % 4; break;
     case O_SCREEN: set.screen_off = (set.screen_off + 5 + d) % 5; break;
     case O_BUTTONS: if (b == BTN_A) { show_settings = 0; show_help = 1; help_tab = 0; } return;
   }
@@ -710,7 +719,7 @@ static void on_button(int b) {
 // --- screenshots without a device: --shots <dir> <module> ------------------------------------------------------------
 static void save_shot(const char *dir, const char *name) {
   if (toast_until) { toast_until = 0; draw(); }   // screenshots without a leftover message
-  SDL_Surface *s = SDL_CreateRGBSurfaceWithFormat(0, 1024, 768, 32, SDL_PIXELFORMAT_ARGB8888);
+  SDL_Surface *s = SDL_CreateRGBSurfaceWithFormat(0, DOT_W, DOT_H, 32, SDL_PIXELFORMAT_ARGB8888);
   SDL_RenderReadPixels(R, NULL, SDL_PIXELFORMAT_ARGB8888, s->pixels, s->pitch);
   SDL_Surface *rgb = SDL_ConvertSurfaceFormat(s, SDL_PIXELFORMAT_RGB24, 0);   // plain 24-bit BMPs open anywhere
   char p[900]; snprintf(p, sizeof p, "%s/%s.bmp", dir, name);
@@ -760,56 +769,8 @@ static void shots(const char *dir, const char *module) {
   }
 }
 
-static void restore_hw(void) { leds_restore(); screen_power(1); }
+static void restore_hw(void) { screen_power(1); }
 static void on_signal(int sig) { restore_hw(); signal(sig, SIG_DFL); raise(sig); }
-
-// The lights: quick up, slower down. Red and Rainbow: every LED at the song's loudness (rainbow: the colour drifts with
-// the song's time). Channels: each LED follows a channel, in that channel's own colour.
-static Uint32 hue_rgb(float h, float v) {   // h 0..1 around the colour wheel, full saturation; v 0..1
-  h -= (int)h; if (h < 0) h += 1;
-  float r = 0, g = 0, b = 0, x = h * 6, f = x - (int)x;
-  switch ((int)x % 6) { case 0: r = 1; g = f; break; case 1: r = 1 - f; g = 1; break; case 2: g = 1; b = f; break;
-                        case 3: g = 1 - f; b = 1; break; case 4: r = f; b = 1; break; default: r = 1; b = 1 - f; }
-  return (Uint32)(r * v * 255) << 16 | (Uint32)(g * v * 255) << 8 | (Uint32)(b * v * 255);
-}
-static Uint32 scale_rgb(Uint32 c, float v) { return (Uint32)((c >> 16 & 255) * v) << 16 | (Uint32)((c >> 8 & 255) * v) << 8 | (Uint32)((c & 255) * v); }
-
-static void lights(void) {
-  static float level, led_level[NLED];
-  int playing = ps.loaded && !ps.paused;
-  if (!set.leds || !playing) { level = 0; memset(led_level, 0, sizeof led_level); leds_restore(); return; }
-  Uint32 rgb[NLED];
-  if (set.leds == 3 && ps.nch) {
-    // the top bar: a LED a channel, left to right (round again past 8); the triggers: the channels panned to that
-    // side; F1 and F2: the whole song, in white
-    float side[2] = { 0, 0 }, all = 0;
-    for (int c = 0; c < ps.nch; c++) { side[ps.ci[c].pan < 128 ? 0 : 1] += vu[c]; all = vu[c] > all ? vu[c] : all; }
-    float t[NLED];
-    for (int i = 0; i < 8; i++) t[i] = vu[i % ps.nch] * 1.4f;
-    t[LED_F2] = t[LED_F1] = all;
-    t[LED_L1] = t[LED_L2] = side[0] * 1.2f;
-    t[LED_R1] = t[LED_R2] = side[1] * 1.2f;
-    for (int i = 0; i < NLED; i++) {
-      if (t[i] > 1) t[i] = 1;
-      led_level[i] = t[i] > led_level[i] ? t[i] : led_level[i] * .85f;
-      float q = (int)(led_level[i] * 16 + .5f) / 16.f;   // few steps: fewer writes
-      int span = ps.nch < 8 ? ps.nch : 8;
-      rgb[i] = i < 8 ? hue_rgb((float)(i % ps.nch % span) / span, q)
-             : i == LED_F1 || i == LED_F2 ? scale_rgb(0xffffff, q)
-             : hue_rgb(i <= LED_L2 ? 0.55f : 0.0f, q);   // left in blue, right in red
-    }
-  } else {
-    float peak = 0, sum = 0;
-    for (int c = 0; c < ps.nch; c++) { sum += vu[c]; if (vu[c] > peak) peak = vu[c]; }
-    float target = peak * .7f + (ps.nch ? sum / ps.nch : 0) * 1.2f;
-    if (target > 1) target = 1;
-    level = target > level ? target : level * .9f + target * .1f;
-    float q = (int)(level * 24 + .5f) / 24.f;
-    Uint32 c = set.leds == 2 ? hue_rgb(ps.time / 40000.f, q) : scale_rgb(DOT_ACCENT_MUSICDISK, q);   // once round the wheel in 40 s
-    for (int i = 0; i < NLED; i++) rgb[i] = c;
-  }
-  leds_frame(rgb);
-}
 
 int main(int argc, char **argv) {
   snprintf(user_dir, sizeof user_dir, "%s", argc > 1 ? argv[1] : ".");
@@ -824,10 +785,11 @@ int main(int argc, char **argv) {
   snprintf(lv[0].path, sizeof lv[0].path, "%s", music_root);
 
   if (SDL_Init(SDL_INIT_VIDEO | SDL_INIT_AUDIO | SDL_INIT_GAMECONTROLLER) != 0) { fprintf(stderr, "SDL: %s\n", SDL_GetError()); return 1; }
-  SDL_Window *win = SDL_CreateWindow("Musicdisk", 0, 0, 1024, 768, shots_dir ? 0 : SDL_WINDOW_FULLSCREEN);
+  dot_screen_detect();   // Brick 1024x768 or Smart Pro 1280x720
+  SDL_Window *win = SDL_CreateWindow("Musicdisk", 0, 0, DOT_W, DOT_H, shots_dir ? 0 : SDL_WINDOW_FULLSCREEN);
   SDL_Renderer *ren = SDL_CreateRenderer(win, -1, shots_dir ? SDL_RENDERER_SOFTWARE : SDL_RENDERER_ACCELERATED | SDL_RENDERER_PRESENTVSYNC);
   if (!ren) { fprintf(stderr, "renderer: %s\n", SDL_GetError()); return 1; }
-  SDL_RenderSetLogicalSize(ren, 1024, 768);
+  SDL_RenderSetLogicalSize(ren, DOT_W, DOT_H);
   if (gfx_init(ren, pak) != 0) return 1;
   info_init(pak);
   settings_load(); settings_apply();
@@ -838,8 +800,7 @@ int main(int argc, char **argv) {
 
   open_level();
 
-  if (!shots_dir) {   // the LEDs and the screen go back the way they were however Musicdisk ends
-    leds_start();
+  if (!shots_dir) {   // the screen comes back on however Musicdisk ends
     atexit(restore_hw);
     signal(SIGTERM, on_signal); signal(SIGINT, on_signal); signal(SIGHUP, on_signal);
     signal(SIGSEGV, on_signal); signal(SIGABRT, on_signal); signal(SIGBUS, on_signal); signal(SIGFPE, on_signal);
@@ -870,7 +831,6 @@ int main(int argc, char **argv) {
       else { player_unload(); screen = SCR_BROWSE; screen_power(1); }
     }
     { const struct xmp_module *m = player_module(); if (m) update_vu(m); }
-    lights();
     int playing = ps.loaded && !ps.paused;
     if (screen_is_on() && playing && OFF_MS[set.screen_off] && SDL_GetTicks() - last_input > (Uint32)OFF_MS[set.screen_off]) screen_power(0);
     if (!screen_is_on()) {

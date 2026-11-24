@@ -7,10 +7,14 @@
 
 const char *DEMO_NAMES[DEMO_PARTS] = { "Starfield", "Donut", "Tunnel", "Twister", "Copper bars", "Dot ball", "Plasma", "Bobs", "Sine scroller" };
 
+// The stage between the header pills and the ticker, on the device's screen (Brick 1024x768: 96-640; Smart Pro
+// 1280x720: 96-592). SY scales the vertical moves to the stage's height.
+#define SW DOT_W
 #define TOP 96
-#define BOTTOM 640
-#define CX 512
+#define BOTTOM (DOT_H - 128)
+#define CX (SW / 2)
 #define CY ((TOP + BOTTOM) / 2)
+#define SY ((BOTTOM - TOP) / 544.f)
 
 static float pulse;    // 0..1, jumps when a note hits (low notes and the loudest channels hit hardest)
 static float energy;   // smoothed loudness of all channels
@@ -66,7 +70,7 @@ static void starfield(float dt, float amount) {
     sz[i] -= speed * dt;
     if (sz[i] < .15f) { star_new(i, 4); continue; }
     float f = 260, x1 = CX + sx[i] / pz * f, y1 = CY + sy[i] / pz * f, x2 = CX + sx[i] / sz[i] * f, y2 = CY + sy[i] / sz[i] * f;
-    if (x2 < 0 || x2 > 1024 || y2 < TOP || y2 > BOTTOM) { star_new(i, 4); continue; }
+    if (x2 < 0 || x2 > SW || y2 < TOP || y2 > BOTTOM) { star_new(i, 4); continue; }
     if (fabsf(x2 - x1) + fabsf(y2 - y1) < 4) x1 = x2 - 4;
     line(x1, y1, x2, y2, mix(C_INK, C_RULE, sz[i] / 4.f));
   }
@@ -145,25 +149,25 @@ static void build_scroll(const struct xmp_module *m) {
     if (l) n += snprintf(scroll + n, sizeof scroll - n, "%s  ", p);
   }
   snprintf(scroll + n, sizeof scroll - n, "         ");
-  scroll_for = m; scroll_x = 1024;
+  scroll_for = m; scroll_x = SW;
 }
 
 // A plain ticker between two rules, like a news line: the title, then the sample names.
 static void scroller(const struct xmp_module *m, float dt, int paused) {
   if (m != scroll_for) build_scroll(m);
-  double_dash(0, 1024, 660, C_RULE);
-  double_dash(0, 1024, 742, C_RULE);
+  double_dash(0, SW, DOT_H - 108, C_RULE);   // 660 and 742 on the Brick
+  double_dash(0, SW, DOT_H - 26, C_RULE);
   int adv = text_w("M", 34, W_REG);
   int len = (int)strlen(scroll);
   if (!paused) scroll_x -= dt * 110;
-  if (scroll_x < -(float)(len * adv)) scroll_x = 1024;
+  if (scroll_x < -(float)(len * adv)) scroll_x = SW;
   int first = scroll_x < 0 ? (int)(-scroll_x / adv) : 0;
   for (int i = first; i < len; i++) {
     int x = (int)(scroll_x + i * adv);
-    if (x > 1024) break;
+    if (x > SW) break;
     if (scroll[i] == ' ') continue;
     char c[2] = { scroll[i], 0 };
-    text(x, 716, c, 34, W_REG, C_INK, A_LEFT);
+    text(x, DOT_H - 52, c, 34, W_REG, C_INK, A_LEFT);
   }
 }
 
@@ -196,12 +200,12 @@ static void twister(float dt, int paused) {
 // --- copper bars: bands of lines swinging up and down; each band spreads with one channel ---------------------------
 static void copper(const PlayerState *ps, const float *vu) {
   for (int b = 0; b < 6; b++) {
-    float y = CY + sinf(clock_s * 1.3f + b * .55f) * 190;
+    float y = CY + sinf(clock_s * 1.3f + b * .55f) * 190 * SY;
     float spread = 3 + (ps->nch ? vu[b % ps->nch] : 0) * 6 + pulse * 2;
     for (int l = -3; l <= 3; l++) {
       SDL_Color c = mix(C_INK, C_RULE, fabsf((float)l) / 3.5f);
       float yy = y + l * spread;
-      line(0, yy, 1024, yy, c);
+      line(0, yy, SW, yy, c);
     }
   }
 }
@@ -216,7 +220,7 @@ static void dotball(const PlayerState *ps, float dt) {
   if (ps->row != ball_row) { if (ps->row % 4 == 0) beat_ph = 0; ball_row = ps->row; }   // back in step with the song
   float bounce = fabsf(cosf(beat_ph * 3.14159f));
   float floor_y = BOTTOM - 40, rad = 120, squash = 1 - pulse * .18f;
-  float cy = floor_y - rad - bounce * 230;
+  float cy = floor_y - rad - bounce * 230 * SY;
   line(CX - 360, floor_y + 2, CX + 360, floor_y + 2, C_RULE);
   float sw = rad * (1.1f - bounce * .4f);   // the shadow shrinks as the ball rises
   for (int i = 0; i < 24; i++) {
@@ -248,7 +252,7 @@ static float field(float x, float y) {
 
 static void plasma(float dt, int paused) {
   if (!paused) plasma_t += dt * (.7f + energy * 1.4f + pulse * 2);
-  float cw = 1024.f / (PW - 1), ch = (float)(BOTTOM - TOP) / (PH - 1);
+  float cw = (float)SW / (PW - 1), ch = (float)(BOTTOM - TOP) / (PH - 1);
   static float v[PW][PH];
   for (int i = 0; i < PW; i++) for (int j = 0; j < PH; j++) v[i][j] = field((i - PW / 2) * .35f, (j - PH / 2) * .35f);
   for (int lv = -3; lv <= 3; lv++) {
@@ -276,25 +280,26 @@ static void circle(float cx, float cy, float r, SDL_Color c) {
 
 static void bobs(void) {
   for (int i = 23; i >= 0; i--) {
-    float x = CX + sinf(clock_s * 1.1f + i * .24f) * 400, y = CY + sinf(clock_s * 1.7f + i * .33f) * 200;
+    float x = CX + sinf(clock_s * 1.1f + i * .24f) * 400, y = CY + sinf(clock_s * 1.7f + i * .33f) * 200 * SY;
     circle(x, y, 22 + pulse * 14 - i * .4f, mix(C_INK, C_RULE, i / 26.f));
   }
 }
 
 // --- sine scroller, the old way: the text is drawn once, then copied in 2-pixel strips that each follow the sine -----
 static SDL_Texture *strip_tex;
-static float big_x = 1024;
+static float big_x = 1e9;   // off the right edge: set to the screen's width on the first frame
 
 static void sine_scroller(const struct xmp_module *m, float dt, int paused) {
   if (m != scroll_for) build_scroll(m);
   if (!strip_tex) {
-    strip_tex = SDL_CreateTexture(R, SDL_PIXELFORMAT_ARGB8888, SDL_TEXTUREACCESS_TARGET, 1024 + 128, 100);
+    strip_tex = SDL_CreateTexture(R, SDL_PIXELFORMAT_ARGB8888, SDL_TEXTUREACCESS_TARGET, SW + 128, 100);
     if (!strip_tex) return;
     SDL_SetTextureBlendMode(strip_tex, SDL_BLENDMODE_BLEND);
   }
   int adv = text_w("M", 80, W_MED), len = (int)strlen(scroll);
+  if (big_x > SW) big_x = SW;
   if (!paused) big_x -= dt * 220;
-  if (big_x < -(float)(len * adv)) big_x = 1024;
+  if (big_x < -(float)(len * adv)) big_x = SW;
   // the visible stretch of text, into the strip texture
   SDL_Texture *old = SDL_GetRenderTarget(R);
   SDL_Rect clip; SDL_RenderGetClipRect(R, &clip);
@@ -304,7 +309,7 @@ static void sine_scroller(const struct xmp_module *m, float dt, int paused) {
   SDL_RenderClear(R);
   float shift = fmodf(big_x, (float)adv); if (shift > 0) shift -= adv;
   int first = (int)((shift - big_x) / adv + .5f);
-  for (int i = 0; i * adv + shift < 1024 + adv; i++) {
+  for (int i = 0; i * adv + shift < SW + adv; i++) {
     int k = first + i; if (k < 0 || k >= len || scroll[k] == ' ') continue;
     char c[2] = { scroll[k], 0 };
     text((int)(i * adv + shift + adv), 80, c, 80, W_MED, C_INK, A_LEFT);
@@ -313,7 +318,7 @@ static void sine_scroller(const struct xmp_module *m, float dt, int paused) {
   if (clip.w) SDL_RenderSetClipRect(R, &clip);
   // and out again, two pixels at a time
   float amp = 70 + pulse * 40;
-  for (int x = 0; x < 1024; x += 2) {
+  for (int x = 0; x < SW; x += 2) {
     float y = CY - 50 + sinf(x * .008f + clock_s * 2.4f) * amp;
     SDL_Rect s = { x + adv, 0, 2, 100 };
     SDL_FRect d = { (float)x, y, 2, 100 };
@@ -323,7 +328,7 @@ static void sine_scroller(const struct xmp_module *m, float dt, int paused) {
 
 void demo_draw(const struct xmp_module *m, const PlayerState *ps, const float *vu, float dt, int part) {
   listen(ps, vu, dt);
-  SDL_Rect clip = { 0, TOP, 1024, BOTTOM - TOP };
+  SDL_Rect clip = { 0, TOP, SW, BOTTOM - TOP };
   SDL_RenderSetClipRect(R, &clip);
   switch (part) {
     case 0: starfield(dt, 1); break;

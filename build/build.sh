@@ -6,7 +6,7 @@ cd "$(dirname "$0")/.."
 XMP=libxmp-4.7.4
 mkdir -p deps; [ -f deps/$XMP.tar.gz ] || curl -sfL -o deps/$XMP.tar.gz https://github.com/libxmp/libxmp/releases/download/$XMP/$XMP.tar.gz
 docker build -q -t nextui-musicdisk-build build >/dev/null
-docker run --rm -v "$PWD:/w" -w /w nextui-musicdisk-build sh -c "
+docker run --rm -v "$PWD:/w" -w /w -e DOT_SCREEN=${DOT_SCREEN:-1024x768} nextui-musicdisk-build sh -c "
 set -e
 mkdir -p build/out
 if [ ! -f build/out/xmp/lib/libxmp.a ]; then

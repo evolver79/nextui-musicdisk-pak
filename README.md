@@ -1,6 +1,6 @@
 # Musicdisk – module player for NextUI
 
-Plays MOD, S3M, XM, IT and about 90 other musicdisk formats on the TrimUI Brick (`tg5040`), from the `Music` folder
+Plays MOD, S3M, XM, IT and about 90 other musicdisk formats on the TrimUI Brick and the TrimUI Smart Pro (both `tg5040`), from the `Music` folder
 on the SD card. Playback is [libxmp](https://github.com/libxmp/libxmp).
 Drawn with [Dot](https://github.com/evolver79/nextui-dotui), the shared look of Musicdisk, Kino, Tuner and Speed.
 
@@ -11,8 +11,15 @@ Drawn with [Dot](https://github.com/evolver79/nextui-dotui), the shared look of 
 <img src="docs/screens/scopes.png" width="49%" alt="Scopes: one card per channel with its waveform, the selected one in white">
 <img src="docs/screens/browse.png" width="49%" alt="Browse: the Music folder on the SD card, a folder and two songs, one named by its .diz">
 <img src="docs/screens/info.png" width="49%" alt="Info: the tracker and song facts, then the file_id.diz in the VGA font and the instrument names">
-<img src="docs/screens/settings.png" width="49%" alt="Settings: stereo separation, interpolation and Amiga filter; lights and screen off">
+<img src="docs/screens/settings.png" width="49%" alt="Settings: stereo separation, interpolation and Amiga filter; screen off and buttons">
 <img src="docs/screens/help.png" width="49%" alt="The buttons screen">
+</p>
+
+Tested on the Brick and the Smart Pro; each gets the layout for its own screen. On the Smart Pro:
+
+<p>
+<img src="docs/screens/smartpro-now.png" width="49%" alt="Now playing on the Smart Pro's wide screen">
+<img src="docs/screens/smartpro-demo.png" width="49%" alt="Demo on the Smart Pro: plasma contour lines across the wide screen">
 </p>
 
 - **Now playing:** title, time, and a column of VU dots per channel. ◄ ► skip 10 s; the button that was used lights up for a moment.
@@ -34,10 +41,6 @@ Drawn with [Dot](https://github.com/evolver79/nextui-dotui), the shared look of 
     on headphones.
   - **Interpolation**: Nearest (the crunchy Amiga sound), Linear or Spline.
   - **Amiga filter**: the Amiga's low-pass filter, switched by the songs themselves.
-  - **Lights**: the Brick's LEDs with the music. *Channels* (the default): a top bar LED for each channel in its own
-    colour, the triggers for the channels panned left (blue) and right (red), F1 and F2 for the whole song. Or
-    *Rainbow*, *Red* or *Off*. When the music stops, and when Musicdisk quits, the LEDs go back to how they were
-    (an animation from LED'oh! is paused meanwhile, then carries on).
   - **Screen off**: after 30 s to 5 min without a button while a song plays (1 min by default), or at once with
     START. The music plays on; any button wakes the screen.
 
@@ -62,8 +65,8 @@ Unzip `Musicdisk.pak.zip` into a new folder on the SD card, `Tools/tg5040/Musicd
 ## Build
 
 `git clone --recursive` (Dot is a submodule in `ui/dot`). `./package.sh` builds `dist/Musicdisk.pak.zip` in an ARM64
-Debian bullseye container (Docker). `build/build.sh --shots <module>` also draws every screen to `build/out/shots/`.
-`./deploy.sh` copies a build to a Brick with a small private helper.
+Debian bullseye container (Docker). `build/build.sh --shots <module>` also draws every screen to `build/out/shots/`
+(`DOT_SCREEN=1280x720` in front: the Smart Pro's). `./deploy.sh` copies a build to a Brick with a small private helper.
 
 Fonts: Doto, Geist and Geist Mono (SIL OFL), from Dot; PxPlus IBM VGA 8x16 by VileR
 ([The Ultimate Oldschool PC Font Pack](https://int10h.org/oldschool-pc-fonts/), CC BY-SA 4.0). libxmp: MIT.
@@ -71,4 +74,4 @@ Fonts: Doto, Geist and Geist Mono (SIL OFL), from Dot; PxPlus IBM VGA 8x16 by Vi
 ## Made with an AI assistant
 
 This pak was built with the help of an LLM (Claude, by Anthropic): the code, scripts and documentation were written in
-conversation with it, and tested on a real TrimUI Brick.
+conversation with it, and tested on a real TrimUI Brick and Smart Pro.
