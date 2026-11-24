@@ -1,12 +1,13 @@
 {
   "name": "Musicdisk",
-  "version": "v0.1.0",
+  "version": "v0.2.0",
   "type": "TOOL",
   "description": "MOD, S3M, XM and IT player in the Dot look for the TrimUI Brick and Smart Pro: plays your modules from the SD card, with the pattern, real per-channel scopes and VU.",
   "author": "evolver79",
   "repo_url": "https://github.com/evolver79/nextui-musicdisk-pak",
   "release_filename": "Musicdisk.pak.zip",
   "changelog": {
+    "v0.2.0": "Runs on the TrimUI Smart Pro too, laid out for its wide screen. The Lights setting is gone: Musicdisk leaves the LEDs to NextUI. Tested on the Brick and the Smart Pro.",
     "v0.1.0": "First release: plays MOD, S3M, XM and IT modules from the SD card, with the pattern, real per-channel scopes and VU meters, an Info screen, shuffle, and the Brick's lights following the music. Drawn in Dot, the shared look of Kino, Tuner, Musicdisk and Speed."
   },
   "platforms": [
